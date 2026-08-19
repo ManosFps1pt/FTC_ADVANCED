@@ -32,3 +32,12 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# Local web Driver Station development artifacts
+.venv-web/
+.pnpm-store/
+web_driver_station/frontend/node_modules/
+web_driver_station/frontend/dist/
+
+# Large local 3D model export
+3d model/MAJOR ROBOT ASSEMBLY.obj
