@@ -109,7 +109,9 @@ def free_port() -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    # parser.add_argument("model", nargs="?", type=Path, default=Path(__file__).with_name("robot_50k.glb"))
     parser.add_argument("model", nargs="?", type=Path, default=Path(__file__).with_name("robot.glb"))
+
     parser.add_argument("--no-browser", action="store_true", help="print the URL without opening it")
     args = parser.parse_args()
     model = args.model.expanduser().resolve()
