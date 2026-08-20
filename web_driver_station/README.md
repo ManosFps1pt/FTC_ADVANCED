@@ -51,12 +51,31 @@ guaranteed stop action, so use the Stop button before closing it.
 
 ## Robot configuration
 
-The **Robot configuration** panel lists the RC's configuration files and loads
-the selected file as its canonical FTC XML. The XML editor is intentional: it
-preserves hardware definitions and custom-device attributes that this dashboard
-does not yet understand. Use **Save & activate** to write the XML to the RC and
-make that configuration active. The backend rejects saves while an OpMode is
-active or the RC is not in `STOPPED`/`NOT_STARTED`, validates the XML before it
-is sent, requires a confirmation in the browser, and does not overwrite
-read-only SDK templates. Saving a configuration can change the active hardware
-map, so test this feature with the robot disabled or safely supported first.
+The **Configure Robot** panel follows the Driver Station flow rather than
+asking the operator to edit XML: choose a saved configuration, open its scanned
+portal and REV Hub, then configure Motors, Servos, Digital, PWM, Analog, and
+I2C port groups using device-type dropdowns and hardware-map names. The app
+holds a structured configuration model and generates XML only for **Save &
+activate**.
+
+The currently loaded RC configuration supplies the scan-owned portal serial
+numbers, module addresses, cameras, and automatic IMU entries. **New from
+loaded scan** uses that discovered topology as a safe baseline and retains
+automatic devices; it intentionally does not invent hub addresses or serial
+numbers. To make the first configuration on an RC with no saved configuration,
+use the official Driver Station: **Configure Robot → New → Scan → Save**. The
+dashboard can then load that scanned topology and create additional copies.
+It preserves unknown XML elements and attributes that were loaded from the RC,
+but does not expose a raw XML editor.
+
+The backend rejects saves while an OpMode is active or the RC is not in
+`STOPPED`/`NOT_STARTED`, validates the generated XML before it is sent,
+requires a confirmation in the browser, and does not overwrite read-only SDK
+templates. Saving a configuration can change the active hardware map, so test
+this feature with the robot disabled or safely supported first.
+
+The lifecycle control is a single state-aware button: **Init** when stopped,
+**Start** after initialization, and **Stop** while running. The connection
+badge also shows a sampled ICMP network ping to the RC every two seconds; a
+dash means ICMP is unavailable or blocked even though the Robocol link may
+still be healthy.

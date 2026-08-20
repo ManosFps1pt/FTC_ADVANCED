@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RobotConfiguration } from "./RobotConfiguration";
 
 type Status = {
   connected: boolean;
@@ -8,17 +9,7 @@ type Status = {
   telemetry: Telemetry | null;
 };
 
-type ConfigurationFile = {
-  name: string;
-  location?: string;
-  resourceId?: number;
-  isDirty?: boolean;
-};
-
-type ConfigurationDocument = {
-  name: string;
-  xml: string;
-};
+type PingResult = { latency_ms: number | null };
 
 type Telemetry = {
   timestamp_ms: number;
@@ -235,15 +226,9 @@ function App() {
   const [gamepad, setGamepad] = useState<GamepadState>(neutralGamepad);
   const [physicalControllers, setPhysicalControllers] = useState<PhysicalController[]>([]);
   const [assignments, setAssignments] = useState<DriverAssignments>({ 1: null, 2: null });
-  const [configurations, setConfigurations] = useState<ConfigurationFile[]>([]);
-  const [activeConfiguration, setActiveConfiguration] = useState<ConfigurationFile | null>(null);
-  const [selectedConfiguration, setSelectedConfiguration] = useState("");
-  const [configurationXml, setConfigurationXml] = useState("");
-  const [configurationSaveName, setConfigurationSaveName] = useState("");
-  const [configurationNotice, setConfigurationNotice] = useState("Load a configuration to inspect or edit its XML.");
-  const [configurationBusy, setConfigurationBusy] = useState(false);
   const [notice, setNotice] = useState("Connect to a controlled test Robot Controller.");
   const [busy, setBusy] = useState(false);
+  const [pingMs, setPingMs] = useState<number | null>(null);
   const assignmentsRef = useRef<DriverAssignments>({ 1: null, 2: null });
   const shortcutKeysRef = useRef<Set<string>>(new Set());
   const lastPhysicalStatesRef = useRef<Record<1 | 2, GamepadState | null>>({ 1: null, 2: null });
@@ -301,6 +286,22 @@ function App() {
     const timer = window.setInterval(() => void refreshStatus(), 1000);
     return () => window.clearInterval(timer);
   }, [refreshStatus]);
+
+  useEffect(() => {
+    if (!connected) {
+      setPingMs(null);
+      return;
+    }
+    let active = true;
+    const samplePing = () => {
+      void api<PingResult>("/ping")
+        .then((result) => { if (active) setPingMs(result.latency_ms); })
+        .catch(() => { if (active) setPingMs(null); });
+    };
+    samplePing();
+    const timer = window.setInterval(samplePing, 2000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [connected]);
 
   useEffect(() => {
     const scheme = window.location.protocol === "https:" ? "wss" : "ws";
@@ -475,7 +476,6 @@ function App() {
       setStatus(nextStatus);
       setNotice(`Connected to ${host}. Select an OpMode before initializing.`);
       await loadOpmodes();
-      await refreshConfigurations(true);
     });
 
   const disconnect = () =>
@@ -483,10 +483,6 @@ function App() {
       const nextStatus = await api<Status>("/disconnect", { method: "POST" });
       setStatus(nextStatus);
       setGamepad(neutralGamepad());
-      setConfigurations([]);
-      setActiveConfiguration(null);
-      setSelectedConfiguration("");
-      setConfigurationXml("");
       setNotice("Disconnected and stop requested.");
     });
 
@@ -511,6 +507,18 @@ function App() {
       setNotice("Stop requested and both gamepad slots released.");
     });
 
+  const runLifecycleAction = () => {
+    if (status.started_opmode || status.robot_state === "RUNNING") return stop();
+    if (status.robot_state === "INIT") return start();
+    return init();
+  };
+
+  const lifecycleAction = status.started_opmode || status.robot_state === "RUNNING"
+    ? { label: "Stop", className: "danger", requiresOpmode: false }
+    : status.robot_state === "INIT"
+      ? { label: "Start", className: "primary", requiresOpmode: true }
+      : { label: "Init", className: "primary", requiresOpmode: true };
+
   const releaseAll = () =>
     runAction(async () => {
       await api<void>(`/gamepads/${user}/clear`, { method: "POST" });
@@ -529,80 +537,6 @@ function App() {
       setGamepad(neutralGamepad());
       setNotice(`Switched safely to Gamepad ${nextUser}.`);
     });
-
-  const selectConfiguration = async (name: string) => {
-    if (!name) return;
-    setConfigurationBusy(true);
-    try {
-      const document = await api<ConfigurationDocument>(`/configurations/${encodeURIComponent(name)}/xml`);
-      const selectedFile = configurations.find((configuration) => configuration.name === document.name);
-      setSelectedConfiguration(document.name);
-      setConfigurationSaveName(selectedFile?.location === "RESOURCE" ? `${document.name} Copy` : document.name);
-      setConfigurationXml(document.xml);
-      setConfigurationNotice(`Loaded ${document.name}. Edits remain local until saved.`);
-    } catch (error) {
-      setConfigurationNotice(error instanceof Error ? error.message : "Unable to load configuration");
-    } finally {
-      setConfigurationBusy(false);
-    }
-  };
-
-  const refreshConfigurations = async (allowJustConnected = false) => {
-    if (!connected && !allowJustConnected) return;
-    setConfigurationBusy(true);
-    try {
-      const list = await api<ConfigurationFile[]>("/configurations");
-      const active = await api<ConfigurationFile>("/configurations/active");
-      setConfigurations(list);
-      setActiveConfiguration(active);
-      const currentIsAvailable = list.some((configuration) => configuration.name === selectedConfiguration);
-      const activeIsAvailable = list.some((configuration) => configuration.name === active.name);
-      const nextName = currentIsAvailable
-        ? selectedConfiguration
-        : activeIsAvailable ? active.name : list[0]?.name || "";
-      if (nextName) {
-        const document = await api<ConfigurationDocument>(`/configurations/${encodeURIComponent(nextName)}/xml`);
-        const selectedFile = list.find((configuration) => configuration.name === document.name);
-        setSelectedConfiguration(document.name);
-        setConfigurationSaveName(selectedFile?.location === "RESOURCE" ? `${document.name} Copy` : document.name);
-        setConfigurationXml(document.xml);
-        setConfigurationNotice(`Loaded ${document.name}. Edits remain local until saved.`);
-      } else {
-        setSelectedConfiguration("");
-        setConfigurationSaveName("");
-        setConfigurationXml("");
-        setConfigurationNotice("The Robot Controller has no editable configuration files.");
-      }
-    } catch (error) {
-      setConfigurationNotice(error instanceof Error ? error.message : "Unable to load configurations");
-    } finally {
-      setConfigurationBusy(false);
-    }
-  };
-
-  const saveConfiguration = async () => {
-    const name = configurationSaveName.trim();
-    if (!name || !configurationXml.trim()) {
-      setConfigurationNotice("Enter a configuration name and XML before saving.");
-      return;
-    }
-    if (!window.confirm(`Save and activate “${name}” on the Robot Controller? This changes its hardware map.`)) return;
-
-    setConfigurationBusy(true);
-    try {
-      const active = await api<ConfigurationFile>("/configurations", {
-        method: "PUT",
-        body: JSON.stringify({ name, xml: configurationXml }),
-      });
-      setActiveConfiguration(active);
-      setConfigurationNotice(`${active.name} was saved and is now active.`);
-      await refreshConfigurations();
-    } catch (error) {
-      setConfigurationNotice(error instanceof Error ? error.message : "Unable to save configuration");
-    } finally {
-      setConfigurationBusy(false);
-    }
-  };
 
   const telemetryEntries = useMemo(() => {
     if (!status.telemetry) return [];
@@ -628,6 +562,7 @@ function App() {
         <div className={`connection ${connected ? "online" : "offline"}`}>
           <span className="status-dot" />
           {connected ? `Connected · ${status.robot_state}` : "Disconnected"}
+          {connected && <span className="ping">Ping {pingMs === null ? "—" : `${pingMs.toFixed(1)} ms`}</span>}
         </div>
       </header>
 
@@ -655,43 +590,11 @@ function App() {
           ))}
         </select>
         <div className="action-row">
-          <button type="button" disabled={!connected || !opmode || busy} onClick={() => void init()}>Init</button>
-          <button className="primary" type="button" disabled={!connected || !opmode || busy} onClick={() => void start()}>Start</button>
-          <button className="danger" type="button" disabled={!connected || busy} onClick={() => void stop()}>Stop</button>
+          <button className={lifecycleAction.className} type="button" disabled={!connected || busy || (lifecycleAction.requiresOpmode && !opmode)} onClick={() => void runLifecycleAction()}>{lifecycleAction.label}</button>
         </div>
       </section>
 
-      <section className="configuration panel">
-        <div className="panel-heading">
-          <div><p className="eyebrow">Hardware map</p><h2>Robot configuration</h2></div>
-          <div className="configuration-header-actions">
-            <span className="configuration-active">Active: {activeConfiguration?.name ?? "Unknown"}</span>
-            <button className="secondary" type="button" disabled={!connected || configurationBusy} onClick={() => void refreshConfigurations()}>Refresh</button>
-          </div>
-        </div>
-        <p className="configuration-safety">Configuration XML is preserved exactly, including devices this dashboard does not recognize. Saving activates the configuration and is allowed only while the Robot Controller reports STOPPED or NOT_STARTED.</p>
-        <div className="configuration-fields">
-          <label>
-            Configuration file
-            <select value={selectedConfiguration} disabled={!connected || configurationBusy} onChange={(event) => void selectConfiguration(event.target.value)}>
-              <option value="">Select a configuration</option>
-              {configurations.map((configuration) => <option key={configuration.name} value={configuration.name}>{configuration.name}{configuration.name === activeConfiguration?.name ? " · active" : ""}{configuration.location === "RESOURCE" ? " · template" : ""}</option>)}
-            </select>
-          </label>
-          <label>
-            Save as
-            <input value={configurationSaveName} maxLength={60} disabled={!connected || configurationBusy} onChange={(event) => setConfigurationSaveName(event.target.value)} placeholder="Configuration name" />
-          </label>
-        </div>
-        <label className="configuration-editor-label">
-          Configuration XML
-          <textarea className="configuration-editor" value={configurationXml} disabled={!connected || configurationBusy} spellCheck={false} onChange={(event) => setConfigurationXml(event.target.value)} placeholder="Select a configuration to load its XML" />
-        </label>
-        <div className="configuration-footer">
-          <p className="notice" aria-live="polite">{configurationNotice}</p>
-          <button className="danger" type="button" disabled={!connected || configurationBusy || status.started_opmode || !["NOT_STARTED", "STOPPED"].includes(status.robot_state) || !configurationXml.trim() || !configurationSaveName.trim()} onClick={() => void saveConfiguration()}>Save &amp; activate</button>
-        </div>
-      </section>
+      <RobotConfiguration connected={connected} robotState={status.robot_state} startedOpmode={status.started_opmode} />
 
       <section className="driver-status panel" aria-label="Driver controller status">
         <div className="driver-status-copy">

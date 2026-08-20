@@ -8,8 +8,11 @@ receives telemetry/status events over a WebSocket.
 from __future__ import annotations
 
 import asyncio
+import platform
 import re
+import subprocess
 import threading
+import time
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from typing import Any
@@ -80,6 +83,11 @@ class DriverStationService:
         self._sockets: set[WebSocket] = set()
         self._last_telemetry: dict[str, Any] | None = None
         self._started_opmode = False
+        # Lifecycle commands have a definitive acknowledgement, whereas the
+        # next heartbeat can arrive late or report the OpMode that just ended.
+        # Keep the confirmed command state authoritative for the UI until the
+        # session is closed.
+        self._confirmed_robot_state: RobotState | None = None
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
@@ -87,11 +95,12 @@ class DriverStationService:
     def status(self) -> dict[str, Any]:
         with self._lock:
             client = self._client
+            robot_state = self._confirmed_robot_state or (client.robot_state if client else RobotState.UNKNOWN)
             return {
                 "connected": bool(client and client.is_connected),
                 "host": client.config.host if client else None,
-                "robot_state": (client.robot_state.name if client else RobotState.UNKNOWN.name),
-                "started_opmode": self._started_opmode,
+                "robot_state": robot_state.name,
+                "started_opmode": robot_state is RobotState.RUNNING,
                 "telemetry": self._last_telemetry,
             }
 
@@ -110,6 +119,7 @@ class DriverStationService:
             )
             client.add_packet_listener(self._on_packet)
             self._client = client
+            self._confirmed_robot_state = None
         try:
             client.connect(timeout_s=request.timeout_s)
         except Exception:
@@ -133,12 +143,14 @@ class DriverStationService:
     def init_opmode(self, request: OpModeRequest) -> dict[str, Any]:
         self._require_client().init_opmode(request.name, request.timeout_s)
         self._started_opmode = False
+        self._confirmed_robot_state = RobotState.INIT
         self._publish_from_thread("status", self.status())
         return self.status()
 
     def start_opmode(self, request: OpModeRequest) -> dict[str, Any]:
         self._require_client().start_opmode(request.name, request.timeout_s)
         self._started_opmode = True
+        self._confirmed_robot_state = RobotState.RUNNING
         self._publish_from_thread("status", self.status())
         return self.status()
 
@@ -148,6 +160,7 @@ class DriverStationService:
         client.clear_gamepad_input(2)
         client.stop_opmode()
         self._started_opmode = False
+        self._confirmed_robot_state = RobotState.STOPPED
         self._publish_from_thread("status", self.status())
         return self.status()
 
@@ -181,6 +194,29 @@ class DriverStationService:
 
     def active_configuration(self) -> dict[str, object]:
         return self._require_client().get_active_configuration()
+
+    def ping(self) -> dict[str, object]:
+        """Measure the local computer's ICMP round trip to the connected RC.
+
+        This deliberately measures network reachability rather than creating
+        extra Robocol commands that could interfere with the Driver Station
+        session. A failed ICMP request is reported as unavailable, not as a
+        connection failure, because some networks block ICMP.
+        """
+        client = self._require_client()
+        command = ["ping", "-n", "1", "-w", "1000", client.config.host] if platform.system() == "Windows" else [
+            "ping", "-c", "1", "-W", "1", client.config.host
+        ]
+        started = time.perf_counter()
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=1.5, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return {"latency_ms": None}
+        if result.returncode != 0:
+            return {"latency_ms": None}
+        # The wall-clock result includes process startup, but remains a useful
+        # cross-platform fallback when a localized ping output has no time= token.
+        return {"latency_ms": round((time.perf_counter() - started) * 1000, 1)}
 
     def read_configuration_xml(self, name: str) -> dict[str, str]:
         return {"name": name, "xml": self._require_client().read_configuration_xml(name)}
@@ -246,6 +282,7 @@ class DriverStationService:
                 pass
         client.close()
         self._started_opmode = False
+        self._confirmed_robot_state = None
         self._last_telemetry = None
 
     def _on_packet(self, packet: Packet) -> None:
@@ -345,6 +382,14 @@ def active_configuration() -> dict[str, object]:
     try:
         return service.active_configuration()
     except (ControlHubError, ValueError) as error:
+        raise _http_error(error) from error
+
+
+@app.get("/api/ping")
+def ping() -> dict[str, object]:
+    try:
+        return service.ping()
+    except ControlHubError as error:
         raise _http_error(error) from error
 
 
