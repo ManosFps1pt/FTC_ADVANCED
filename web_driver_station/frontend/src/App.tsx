@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RobotConfiguration } from "./RobotConfiguration";
+import { TelemetryDashboard } from "./TelemetryDashboard";
 
 type Status = {
   connected: boolean;
@@ -10,6 +11,21 @@ type Status = {
 };
 
 type PingResult = { latency_ms: number | null };
+
+type RobotDataPacket = {
+  payload: Record<string, unknown>;
+  peer: { host: string; port: number } | null;
+  received_monotonic_ns: number;
+  received_at_ms: number;
+};
+
+type RobotDataStatus = {
+  listening: boolean;
+  connected: boolean;
+  connection_count: number;
+  peers: { host: string; port: number }[];
+  latest_packet: RobotDataPacket | null;
+};
 
 type Telemetry = {
   timestamp_ms: number;
@@ -211,7 +227,7 @@ function Axis({
   );
 }
 
-function App() {
+function DriverStationPage() {
   const [host, setHost] = useState("192.168.43.1");
   const [status, setStatus] = useState<Status>({
     connected: false,
@@ -229,6 +245,13 @@ function App() {
   const [notice, setNotice] = useState("Connect to a controlled test Robot Controller.");
   const [busy, setBusy] = useState(false);
   const [pingMs, setPingMs] = useState<number | null>(null);
+  const [robotData, setRobotData] = useState<RobotDataStatus>({
+    listening: false,
+    connected: false,
+    connection_count: 0,
+    peers: [],
+    latest_packet: null,
+  });
   const assignmentsRef = useRef<DriverAssignments>({ 1: null, 2: null });
   const shortcutKeysRef = useRef<Set<string>>(new Set());
   const lastPhysicalStatesRef = useRef<Record<1 | 2, GamepadState | null>>({ 1: null, 2: null });
@@ -318,6 +341,16 @@ function App() {
     };
     return () => socket.close();
   }, [applyStatus]);
+
+  useEffect(() => {
+    const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+    const socket = new WebSocket(`${scheme}://${window.location.host}/ws/data`);
+    socket.onmessage = (event: MessageEvent<string>) => {
+      const message = JSON.parse(event.data) as { kind: string; data: RobotDataStatus };
+      if (message.kind === "robot_data_status") setRobotData(message.data);
+    };
+    return () => socket.close();
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -566,6 +599,11 @@ function App() {
         </div>
       </header>
 
+      <nav className="workspace-nav" aria-label="Application pages">
+        <a className="current" href="#/">Driver Station</a>
+        <a href="#/telemetry">Telemetry Lab</a>
+      </nav>
+
       <section className="connection-panel panel">
         <label>
           Robot Controller address
@@ -612,6 +650,36 @@ function App() {
               </div>
             );
           })}
+        </div>
+      </section>
+
+      <section className="robot-data panel" aria-label="Robot data connection and latest packet">
+        <div className="robot-data-header">
+          <div>
+            <p className="eyebrow">Independent TCP stream</p>
+            <h2>Robot data</h2>
+            <p>Port 5810 remains ready between OpModes; the robot connects while data collection is active.</p>
+          </div>
+          <div className={`data-connection ${robotData.connected ? "active" : "inactive"}`}>
+            <span className="driver-dot" />
+            <div>
+              <strong>{robotData.connected ? "CONNECTED" : "DISCONNECTED"}</strong>
+              <small>
+                {robotData.connected
+                  ? robotData.peers.map((peer) => `${peer.host}:${peer.port}`).join(", ")
+                  : robotData.listening ? "Listening for the Robot Controller" : "TCP listener unavailable"}
+              </small>
+            </div>
+          </div>
+        </div>
+        <div className="latest-packet">
+          <div className="packet-heading">
+            <strong>Latest packet received</strong>
+            <span>{robotData.latest_packet ? new Date(robotData.latest_packet.received_at_ms).toLocaleTimeString() : "WAITING"}</span>
+          </div>
+          {robotData.latest_packet
+            ? <pre>{JSON.stringify(robotData.latest_packet.payload, null, 2)}</pre>
+            : <p className="empty-state">The newest complete JSON packet will appear here.</p>}
         </div>
       </section>
 
@@ -679,6 +747,18 @@ function App() {
       </section>
     </main>
   );
+}
+
+function App() {
+  const [telemetryPage, setTelemetryPage] = useState(() => window.location.hash === "#/telemetry");
+
+  useEffect(() => {
+    const updatePage = () => setTelemetryPage(window.location.hash === "#/telemetry");
+    window.addEventListener("hashchange", updatePage);
+    return () => window.removeEventListener("hashchange", updatePage);
+  }, []);
+
+  return telemetryPage ? <TelemetryDashboard /> : <DriverStationPage />;
 }
 
 export default App;

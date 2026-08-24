@@ -8,12 +8,14 @@ receives telemetry/status events over a WebSocket.
 from __future__ import annotations
 
 import asyncio
+import os
 import platform
 import re
 import subprocess
 import threading
 import time
 import xml.etree.ElementTree as ElementTree
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,8 @@ from ftc_control_hub import (
     RobotState,
     decode_telemetry,
 )
+from .robot_data_tcp_server import DEFAULT_HOST, DEFAULT_PORT, ReceivedRobotPacket, RobotDataTcpServer
+from .telemetry_store import TelemetryProtocolError, TelemetryStore, TelemetryUpdate
 
 
 class ConnectRequest(BaseModel):
@@ -314,7 +318,152 @@ class DriverStationService:
             self._sockets.discard(socket)
 
 
+class RobotDataService:
+    """Expose raw packets and structured telemetry to the web dashboard."""
+
+    def __init__(self) -> None:
+        host = os.getenv("ROBOT_DATA_TCP_HOST", DEFAULT_HOST)
+        port = int(os.getenv("ROBOT_DATA_TCP_PORT", str(DEFAULT_PORT)))
+        self._server = RobotDataTcpServer(
+            host,
+            port,
+            packet_handler=self._on_packet,
+            connection_handler=self._on_connection,
+        )
+        self._sockets: set[WebSocket] = set()
+        self._telemetry_sockets: set[WebSocket] = set()
+        self._peers: set[tuple[str, int]] = set()
+        self._connection_ids: dict[tuple[str, int], str] = {}
+        self._latest_packet: dict[str, Any] | None = None
+        self._telemetry = TelemetryStore()
+
+    async def start(self) -> None:
+        await self._server.start()
+
+    async def close(self) -> None:
+        await self._server.close()
+        self._peers.clear()
+        self._connection_ids.clear()
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "listening": bool(self._server.listening_addresses),
+            "connected": bool(self._peers),
+            "connection_count": len(self._peers),
+            "peers": [{"host": host, "port": port} for host, port in sorted(self._peers)],
+            "latest_packet": self._latest_packet,
+            "telemetry": self._telemetry.status(),
+        }
+
+    async def add_socket(self, socket: WebSocket) -> None:
+        await socket.accept()
+        self._sockets.add(socket)
+        await socket.send_json({"kind": "robot_data_status", "data": self.status()})
+
+    def remove_socket(self, socket: WebSocket) -> None:
+        self._sockets.discard(socket)
+
+    async def add_telemetry_socket(self, socket: WebSocket) -> None:
+        """Attach a browser to normalized telemetry, including a short history."""
+
+        await socket.accept()
+        self._telemetry_sockets.add(socket)
+        await socket.send_json({"kind": "telemetry_state", "data": self._telemetry.live_state()})
+
+    def remove_telemetry_socket(self, socket: WebSocket) -> None:
+        self._telemetry_sockets.discard(socket)
+
+    def telemetry_state(self) -> dict[str, Any]:
+        return self._telemetry.live_state()
+
+    async def _on_packet(self, packet: ReceivedRobotPacket) -> Mapping[str, Any] | None:
+        self._latest_packet = {
+            "payload": dict(packet.payload),
+            "peer": {"host": packet.peer[0], "port": packet.peer[1]} if packet.peer else None,
+            "received_monotonic_ns": packet.received_monotonic_ns,
+            "received_at_ms": int(time.time() * 1000),
+        }
+        is_hello = packet.payload.get("protocol") == "ftc-telemetry" and packet.payload.get("type") == "hello"
+        resumed = is_hello and self._telemetry.has_session(packet.payload.get("sessionId"))
+        try:
+            updates = self._telemetry.ingest(
+                packet.payload,
+                received_monotonic_ns=packet.received_monotonic_ns,
+                received_at_ms=self._latest_packet["received_at_ms"],
+            )
+        except TelemetryProtocolError:
+            # The raw packet remains visible to help diagnose a bad robot-side
+            # implementation. The structured page shows the concise error.
+            updates = []
+            structured_accepted = False
+        else:
+            structured_accepted = True
+            if packet.peer is not None and packet.payload.get("protocol") == "ftc-telemetry":
+                connection_id = packet.payload.get("connectionId")
+                if isinstance(connection_id, str):
+                    self._connection_ids[packet.peer] = connection_id
+        await self._broadcast_status()
+        for update in updates:
+            await self._broadcast_telemetry(update)
+        if structured_accepted and is_hello:
+            return self._hello_ack(packet.payload, resumed=resumed)
+        return None
+
+    @staticmethod
+    def _hello_ack(payload: Mapping[str, Any], *, resumed: bool) -> dict[str, Any]:
+        """Accept a structured session before it sends its catalog and samples."""
+
+        return {
+            "protocol": "ftc-telemetry",
+            "version": 1,
+            "type": "hello_ack",
+            "sessionId": payload["sessionId"],
+            "connectionId": payload["connectionId"],
+            "sequence": "0",
+            "robotTimeNs": "0",
+            "data": {
+                "accepted": True,
+                "serverTimeNs": str(time.perf_counter_ns()),
+                "sessionDisposition": "resumed" if resumed else "new",
+            },
+        }
+
+    async def _on_connection(self, connected: bool, peer: tuple[str, int] | None) -> None:
+        if peer is not None:
+            if connected:
+                self._peers.add(peer)
+            else:
+                self._peers.discard(peer)
+                connection_id = self._connection_ids.pop(peer, None)
+                for update in self._telemetry.disconnect_connection(connection_id):
+                    await self._broadcast_telemetry(update)
+        await self._broadcast_status()
+
+    async def _broadcast_status(self) -> None:
+        message = {"kind": "robot_data_status", "data": self.status()}
+        stale: list[WebSocket] = []
+        for socket in tuple(self._sockets):
+            try:
+                await socket.send_json(message)
+            except RuntimeError:
+                stale.append(socket)
+        for socket in stale:
+            self._sockets.discard(socket)
+
+    async def _broadcast_telemetry(self, update: TelemetryUpdate) -> None:
+        message = {"kind": update.kind, "data": update.data}
+        stale: list[WebSocket] = []
+        for socket in tuple(self._telemetry_sockets):
+            try:
+                await socket.send_json(message)
+            except RuntimeError:
+                stale.append(socket)
+        for socket in stale:
+            self._telemetry_sockets.discard(socket)
+
+
 service = DriverStationService()
+robot_data_service = RobotDataService()
 app = FastAPI(title="FTC Local Driver Station", docs_url=None, redoc_url=None)
 app.add_middleware(
     CORSMiddleware,
@@ -327,10 +476,12 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup() -> None:
     service.set_event_loop(asyncio.get_running_loop())
+    await robot_data_service.start()
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    await robot_data_service.close()
     service.disconnect(stop=True)
 
 
@@ -346,6 +497,16 @@ def _validate_gamepad_user(user: int) -> None:
 @app.get("/api/status")
 def get_status() -> dict[str, Any]:
     return service.status()
+
+
+@app.get("/api/data/status")
+def get_robot_data_status() -> dict[str, Any]:
+    return robot_data_service.status()
+
+
+@app.get("/api/data/telemetry")
+def get_live_telemetry_state() -> dict[str, Any]:
+    return robot_data_service.telemetry_state()
 
 
 @app.post("/api/connect")
@@ -467,6 +628,26 @@ async def websocket(socket: WebSocket) -> None:
             await socket.receive_text()
     except WebSocketDisconnect:
         service.remove_socket(socket)
+
+
+@app.websocket("/ws/data")
+async def robot_data_websocket(socket: WebSocket) -> None:
+    await robot_data_service.add_socket(socket)
+    try:
+        while True:
+            await socket.receive_text()
+    except WebSocketDisconnect:
+        robot_data_service.remove_socket(socket)
+
+
+@app.websocket("/ws/telemetry")
+async def telemetry_websocket(socket: WebSocket) -> None:
+    await robot_data_service.add_telemetry_socket(socket)
+    try:
+        while True:
+            await socket.receive_text()
+    except WebSocketDisconnect:
+        robot_data_service.remove_telemetry_socket(socket)
 
 
 frontend_dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"

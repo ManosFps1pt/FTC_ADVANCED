@@ -74,6 +74,25 @@ requires a confirmation in the browser, and does not overwrite read-only SDK
 templates. Saving a configuration can change the active hardware map, so test
 this feature with the robot disabled or safely supported first.
 
+## Independent robot-data TCP transport test
+
+The first robot-data transport is a separate backend service and does not yet
+feed the frontend. Start its laptop listener from the repository root:
+
+```powershell
+python -m web_driver_station.backend.robot_data_tcp_server --host 0.0.0.0 --port 5810
+```
+
+Keep the laptop's robot-network adapter on **DHCP**. On initialization,
+**Telemetry Gamepad Test** broadcasts `where_is_data_server` over UDP port
+`5811`; the listener replies with the laptop's current address and TCP port.
+The OpMode then opens its framed TCP stream to that reply on port `5810`.
+Permit **UDP 5811** and **TCP 5810** on the applicable Windows firewall
+profile. Initialize and start **Telemetry Gamepad Test**; the terminal
+continuously redraws the newest framed packet received from the Control Hub.
+Stopping the OpMode closes that session, while the laptop keeps listening for
+the next one.
+
 The lifecycle control is a single state-aware button: **Init** when stopped,
 **Start** after initialization, and **Stop** while running. The connection
 badge also shows a sampled ICMP network ping to the RC every two seconds; a

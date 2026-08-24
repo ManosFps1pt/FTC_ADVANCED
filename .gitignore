@@ -41,3 +41,4 @@ web_driver_station/frontend/dist/
 
 # Large local 3D model export
 3d model/MAJOR ROBOT ASSEMBLY.obj
+robot.glb
