@@ -26,4 +26,6 @@ android {
 
 dependencies {
     implementation project(':FtcRobotController')
+    // Generated telemetry messages use Android's compact protobuf runtime.
+    implementation 'com.google.protobuf:protobuf-javalite:3.25.5'
 }

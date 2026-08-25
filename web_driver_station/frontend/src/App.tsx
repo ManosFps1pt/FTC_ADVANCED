@@ -12,19 +12,11 @@ type Status = {
 
 type PingResult = { latency_ms: number | null };
 
-type RobotDataPacket = {
-  payload: Record<string, unknown>;
-  peer: { host: string; port: number } | null;
-  received_monotonic_ns: number;
-  received_at_ms: number;
-};
-
 type RobotDataStatus = {
   listening: boolean;
   connected: boolean;
   connection_count: number;
   peers: { host: string; port: number }[];
-  latest_packet: RobotDataPacket | null;
 };
 
 type Telemetry = {
@@ -227,7 +219,7 @@ function Axis({
   );
 }
 
-function DriverStationPage() {
+function DriverStationPage({ page }: { page: "driver" | "configuration" | "telemetry" }) {
   const [host, setHost] = useState("192.168.43.1");
   const [status, setStatus] = useState<Status>({
     connected: false,
@@ -250,7 +242,6 @@ function DriverStationPage() {
     connected: false,
     connection_count: 0,
     peers: [],
-    latest_packet: null,
   });
   const assignmentsRef = useRef<DriverAssignments>({ 1: null, 2: null });
   const shortcutKeysRef = useRef<Set<string>>(new Set());
@@ -485,7 +476,9 @@ function DriverStationPage() {
   const loadOpmodes = async () => {
     const list = await api<Record<string, unknown>[]>("/opmodes");
     setOpmodes(list);
-    setOpmode((previous) => previous || String(list[0]?.name ?? ""));
+    // The SDK's first entry is commonly its internal "$Stop$Robot$" sentinel.
+    // It is not a user OpMode, so never preselect it when a session connects.
+    setOpmode("");
   };
 
   const runAction = async (action: () => Promise<void>) => {
@@ -584,26 +577,24 @@ function DriverStationPage() {
     return physicalControllers.find((controller) => controller.index === controllerIndex)?.id ?? "Disconnected controller";
   };
 
+  const topbar = <header className="driver-topbar panel">
+    <div className="driver-brand"><p className="eyebrow">Local lab dashboard</p><h1>FTC Driver Station</h1></div>
+    <div className="topbar-status" aria-label="Driver Station status">
+      <div className={`connection ${connected ? "online" : "offline"}`}><span className="status-dot" />{connected ? `Connected · ${status.robot_state}` : "Disconnected"}{connected && <span className="ping">Ping {pingMs === null ? "—" : `${pingMs.toFixed(1)} ms`}</span>}</div>
+      <div className="topbar-drivers" aria-label="Controller status">
+        {([1, 2] as const).map((driver) => { const assigned = controllerName(assignments[driver]); return <span className={assigned ? "active" : ""} key={driver}><i className="driver-dot" />D{driver}: {assigned ? "Ready" : physicalMode ? "Unassigned" : user === driver ? "Virtual" : "Available"}</span>; })}
+      </div>
+      <div className={`topbar-tcp ${robotData.connected ? "active" : ""}`}><i className="driver-dot" />TCP {robotData.connected ? "Connected" : robotData.listening ? "Listening" : "Offline"}</div>
+      <a className={`topbar-link ${page === "configuration" ? "current" : ""}`} href="#/configure">Configure Robot</a><a className="topbar-link" href={page === "telemetry" ? "#/" : "#/telemetry"}>{page === "telemetry" ? "Driver Station" : "Telemetry Lab"}</a>
+    </div>
+  </header>;
+
   return (
-    <main>
-      <header className="hero">
-        <div>
-          <p className="eyebrow">Local lab dashboard</p>
-          <h1>FTC Driver Station</h1>
-          <p className="subhead">Robocol stays in Python. This browser only renders state and sends desired controls.</p>
-        </div>
-        <div className={`connection ${connected ? "online" : "offline"}`}>
-          <span className="status-dot" />
-          {connected ? `Connected · ${status.robot_state}` : "Disconnected"}
-          {connected && <span className="ping">Ping {pingMs === null ? "—" : `${pingMs.toFixed(1)} ms`}</span>}
-        </div>
-      </header>
+    <>
+    <main className="driver-dashboard" hidden={page !== "driver"}>
+      {topbar}
 
-      <nav className="workspace-nav" aria-label="Application pages">
-        <a className="current" href="#/">Driver Station</a>
-        <a href="#/telemetry">Telemetry Lab</a>
-      </nav>
-
+      <section className="driver-command-row">
       <section className="connection-panel panel">
         <label>
           Robot Controller address
@@ -631,56 +622,6 @@ function DriverStationPage() {
           <button className={lifecycleAction.className} type="button" disabled={!connected || busy || (lifecycleAction.requiresOpmode && !opmode)} onClick={() => void runLifecycleAction()}>{lifecycleAction.label}</button>
         </div>
       </section>
-
-      <RobotConfiguration connected={connected} robotState={status.robot_state} startedOpmode={status.started_opmode} />
-
-      <section className="driver-status panel" aria-label="Driver controller status">
-        <div className="driver-status-copy">
-          <p className="eyebrow">Driver input</p>
-          <h2>{physicalMode ? "Physical controllers" : "Virtual controller"}</h2>
-          <p>{physicalMode ? "Hold Start + A for Driver 1 or Start + B for Driver 2." : "Connect a controller to switch to physical input."}</p>
-        </div>
-        <div className="driver-indicators">
-          {([1, 2] as const).map((driver) => {
-            const assigned = controllerName(assignments[driver]);
-            return (
-              <div className={`driver-indicator ${assigned ? "active" : "inactive"}`} key={driver}>
-                <span className="driver-dot" />
-                <div><strong>Driver {driver}</strong><small>{assigned ? assigned : physicalMode ? "Awaiting assignment" : user === driver ? "Virtual control selected" : "Virtual control available"}</small></div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      <section className="robot-data panel" aria-label="Robot data connection and latest packet">
-        <div className="robot-data-header">
-          <div>
-            <p className="eyebrow">Independent TCP stream</p>
-            <h2>Robot data</h2>
-            <p>Port 5810 remains ready between OpModes; the robot connects while data collection is active.</p>
-          </div>
-          <div className={`data-connection ${robotData.connected ? "active" : "inactive"}`}>
-            <span className="driver-dot" />
-            <div>
-              <strong>{robotData.connected ? "CONNECTED" : "DISCONNECTED"}</strong>
-              <small>
-                {robotData.connected
-                  ? robotData.peers.map((peer) => `${peer.host}:${peer.port}`).join(", ")
-                  : robotData.listening ? "Listening for the Robot Controller" : "TCP listener unavailable"}
-              </small>
-            </div>
-          </div>
-        </div>
-        <div className="latest-packet">
-          <div className="packet-heading">
-            <strong>Latest packet received</strong>
-            <span>{robotData.latest_packet ? new Date(robotData.latest_packet.received_at_ms).toLocaleTimeString() : "WAITING"}</span>
-          </div>
-          {robotData.latest_packet
-            ? <pre>{JSON.stringify(robotData.latest_packet.payload, null, 2)}</pre>
-            : <p className="empty-state">The newest complete JSON packet will appear here.</p>}
-        </div>
       </section>
 
       <section className="dashboard-grid">
@@ -746,19 +687,36 @@ function DriverStationPage() {
         </aside>
       </section>
     </main>
+    {page === "configuration" && <main className="configuration-workspace">
+      <header className="hero"><div><p className="eyebrow">Robot setup</p><h1>Configure Robot</h1><p className="subhead">Edit and activate the Robot Controller hardware configuration.</p></div><a className="secondary topbar-link" href="#/">← Driver Station</a></header>
+      <nav className="workspace-nav" aria-label="Application pages"><a href="#/">Driver Station</a><a className="current" href="#/configure">Configure Robot</a><a href="#/telemetry">Telemetry Lab</a></nav>
+      <RobotConfiguration connected={connected} robotState={status.robot_state} startedOpmode={status.started_opmode} />
+    </main>}
+    {page === "telemetry" && <TelemetryDashboard topbar={topbar} />}
+    </>
   );
 }
 
 function App() {
-  const [telemetryPage, setTelemetryPage] = useState(() => window.location.hash === "#/telemetry");
+  const [page, setPage] = useState<"driver" | "configuration" | "telemetry">(() => {
+    if (window.location.hash === "#/telemetry") return "telemetry";
+    return window.location.hash === "#/configure" ? "configuration" : "driver";
+  });
 
   useEffect(() => {
-    const updatePage = () => setTelemetryPage(window.location.hash === "#/telemetry");
+    const updatePage = () => setPage(window.location.hash === "#/telemetry" ? "telemetry" : window.location.hash === "#/configure" ? "configuration" : "driver");
     window.addEventListener("hashchange", updatePage);
     return () => window.removeEventListener("hashchange", updatePage);
   }, []);
 
-  return telemetryPage ? <TelemetryDashboard /> : <DriverStationPage />;
+  // Keep the Driver Station mounted while viewing telemetry. Its physical
+  // gamepad polling and Robocol forwarding are part of the control session,
+  // not the visible Driver Station page.
+  return (
+    <>
+      <DriverStationPage page={page} />
+    </>
+  );
 }
 
 export default App;

@@ -3,9 +3,20 @@ package org.firstinspires.ftc.teamcode.data;
 import android.os.Build;
 import android.os.SystemClock;
 
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
+import com.google.protobuf.ByteString;
+import com.qualcomm.robotcore.hardware.Gamepad;
+
+import org.firstinspires.ftc.teamcode.data.protocol.Channel;
+import org.firstinspires.ftc.teamcode.data.protocol.ChannelRole;
+import org.firstinspires.ftc.teamcode.data.protocol.ChannelValue;
+import org.firstinspires.ftc.teamcode.data.protocol.Envelope;
+import org.firstinspires.ftc.teamcode.data.protocol.GamepadSnapshot;
+import org.firstinspires.ftc.teamcode.data.protocol.Heartbeat;
+import org.firstinspires.ftc.teamcode.data.protocol.Hello;
+import org.firstinspires.ftc.teamcode.data.protocol.SampleBatch;
+import org.firstinspires.ftc.teamcode.data.protocol.Schema;
+import org.firstinspires.ftc.teamcode.data.protocol.Snapshot;
+import org.firstinspires.ftc.teamcode.data.protocol.ValueType;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -20,7 +31,8 @@ import java.net.InetSocketAddress;
 import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
 import java.net.Socket;
-import java.nio.charset.StandardCharsets;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -35,360 +47,242 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
-/**
- * Publishes {@code hello -> catalog -> full sample} telemetry frames without
- * blocking an OpMode. Hardware must be read by the OpMode before values are
- * copied into {@link #publishSample(Map)}.
- */
+/** Publishes protobuf telemetry without blocking the OpMode thread. */
 public final class StructuredRobotDataClient implements Closeable {
     public static final int DEFAULT_PORT = 5810;
     public static final int DEFAULT_DISCOVERY_PORT = 5811;
-
-    private static final int VERSION = 1;
-    private static final int MAX_FRAME_BYTES = 1_048_576;
-    private static final int QUEUE_CAPACITY = 256;
-    private static final long HEARTBEAT_INTERVAL_NS = 1_000_000_000L;
+    /** Standard diagnostic channel automatically added to every structured OpMode session. */
+    public static final String LOOP_TIME_SIGNAL_ID = "opmode.loopTimeMs";
+    private static final int VERSION = 2, MAX_FRAME_BYTES = 1_048_576, QUEUE_CAPACITY = 256, MAX_BATCH = 32;
+    private static final long BATCH_WINDOW_MS = 20, HEARTBEAT_INTERVAL_NS = 1_000_000_000L;
+    private static final byte[] DISCOVERY_MAGIC = {'F', 'T', 'R', 'D'};
+    private static final int DISCOVERY_REQUEST_BYTES = 21, DISCOVERY_RESPONSE_BYTES = 23;
 
     private final String opModeName;
-    private final int tcpPort;
-    private final int discoveryPort;
-    private final String sessionId = UUID.randomUUID().toString();
+    private final int tcpPort, discoveryPort;
+    private final UUID sessionId = UUID.randomUUID();
     private final List<Device> devices = new ArrayList<>();
     private final List<Signal> signals = new ArrayList<>();
-    private final LinkedBlockingDeque<Sample> samples = new LinkedBlockingDeque<>(QUEUE_CAPACITY);
-    private final AtomicLong nextSampleSequence = new AtomicLong();
-    private final AtomicLong droppedSamples = new AtomicLong();
-    private final AtomicBoolean running = new AtomicBoolean();
-    private final AtomicBoolean connected = new AtomicBoolean();
-
+    private final LinkedBlockingDeque<Outbound> frames = new LinkedBlockingDeque<>(QUEUE_CAPACITY);
+    private final AtomicLong nextSample = new AtomicLong(), droppedSamples = new AtomicLong(), lastLoopPublishNs = new AtomicLong();
+    private final AtomicBoolean running = new AtomicBoolean(), connected = new AtomicBoolean();
     private volatile Socket socket;
     private volatile Thread worker;
     private volatile String lastError;
 
     public StructuredRobotDataClient(int discoveryPort, int tcpPort, String opModeName) {
-        if (discoveryPort <= 0 || discoveryPort > 65_535 || tcpPort <= 0 || tcpPort > 65_535) {
-            throw new IllegalArgumentException("ports must be between 1 and 65535");
-        }
-        if (opModeName == null || opModeName.trim().isEmpty()) {
-            throw new IllegalArgumentException("opModeName must not be blank");
-        }
-        this.discoveryPort = discoveryPort;
-        this.tcpPort = tcpPort;
-        this.opModeName = opModeName;
+        if (discoveryPort <= 0 || discoveryPort > 65535 || tcpPort <= 0 || tcpPort > 65535) throw new IllegalArgumentException("ports must be between 1 and 65535");
+        this.discoveryPort = discoveryPort; this.tcpPort = tcpPort; this.opModeName = text(opModeName);
     }
 
-    public synchronized StructuredRobotDataClient addDevice(
-            String id, String label, String subsystem, String deviceType) {
-        ensureNotStarted();
-        devices.add(new Device(id, label, subsystem, deviceType));
-        return this;
+    public synchronized StructuredRobotDataClient addDevice(String id, String label, String subsystem, String deviceType) {
+        ensureNotStarted(); devices.add(new Device(id, label, subsystem, deviceType)); return this;
     }
 
-    public synchronized StructuredRobotDataClient addSignal(
-            String id,
-            String label,
-            String deviceId,
-            String quantity,
-            String unit,
-            String valueType,
-            String role,
-            double sampleHintHz) {
-        ensureNotStarted();
-        signals.add(new Signal(id, label, deviceId, quantity, unit, valueType, role, sampleHintHz));
-        return this;
+    public synchronized StructuredRobotDataClient addSignal(String id, String label, String deviceId, String quantity, String unit, String valueType, String role, double sampleHintHz) {
+        if (LOOP_TIME_SIGNAL_ID.equals(id)) throw new IllegalArgumentException(LOOP_TIME_SIGNAL_ID + " is a reserved standard signal");
+        ensureNotStarted(); signals.add(new Signal(id, label, deviceId, quantity, unit, valueType, role, sampleHintHz)); return this;
     }
 
     public synchronized void start() {
+        installStandardSignals();
         validateCatalog();
         if (!running.compareAndSet(false, true)) return;
-        worker = new Thread(this::run, "StructuredRobotDataClient");
-        worker.setDaemon(true);
-        worker.start();
+        worker = new Thread(this::run, "StructuredRobotDataClient"); worker.setDaemon(true); worker.start();
     }
 
-    /** Copies one complete current-value map into the bounded network queue. */
+    /** Copies a complete snapshot and returns immediately. Encoding occurs on the worker. */
     public boolean publishSample(Map<String, ?> values) {
         if (!running.get()) return false;
         Map<String, Object> copy = new LinkedHashMap<>();
         for (Map.Entry<String, ?> entry : values.entrySet()) copy.put(entry.getKey(), entry.getValue());
-        Set<String> expected = signalIds();
-        if (!expected.equals(copy.keySet())) {
-            throw new IllegalArgumentException("sample must contain every registered signal exactly once");
-        }
-        Sample sample = new Sample(SystemClock.elapsedRealtimeNanos(), nextSampleSequence.getAndIncrement(), copy);
-        if (samples.offerLast(sample)) return true;
-        samples.pollFirst(); // Keep the newest robot state if the laptop is slow or unavailable.
-        droppedSamples.incrementAndGet();
-        return samples.offerLast(sample);
+        Set<String> expected = signalIds(); expected.remove(LOOP_TIME_SIGNAL_ID);
+        if (!expected.equals(copy.keySet())) throw new IllegalArgumentException("sample must contain every user-registered signal exactly once");
+        long now = SystemClock.elapsedRealtimeNanos();
+        long previous = lastLoopPublishNs.getAndSet(now);
+        copy.put(LOOP_TIME_SIGNAL_ID, previous == 0 ? 0.0 : (now - previous) / 1_000_000.0);
+        return enqueue(new Sample(now, nextSample.getAndIncrement(), copy));
+    }
+
+    /**
+     * Standard once-per-OpMode-loop publisher. It records loop time in the TCP snapshot
+     * and independently publishes the complete FTC gamepad state.
+     */
+    public boolean publishLoop(Map<String, ?> values, Gamepad gamepad1, Gamepad gamepad2) {
+        boolean sampleQueued = publishSample(values);
+        boolean gamepadsQueued = publishGamepads(gamepad1, gamepad2);
+        return sampleQueued && gamepadsQueued;
+    }
+
+    public boolean publishGamepads(Gamepad gamepad1, Gamepad gamepad2) {
+        if (!running.get()) return false;
+        if (gamepad1 == null || gamepad2 == null) throw new IllegalArgumentException("gamepads must not be null");
+        return enqueue(new GamepadFrame(SystemClock.elapsedRealtimeNanos(), gamepad1, gamepad2));
     }
 
     public boolean isConnected() { return connected.get(); }
-    public int getQueuedPacketCount() { return samples.size(); }
+    public int getQueuedPacketCount() { return frames.size(); }
     public long getDroppedPacketCount() { return droppedSamples.get(); }
     public String getLastError() { return lastError; }
 
-    @Override
-    public synchronized void close() {
+    @Override public synchronized void close() {
         if (!running.getAndSet(false)) return;
-        connected.set(false);
-        closeSocket(socket);
-        if (worker != null) worker.interrupt();
-        samples.clear();
+        connected.set(false); closeSocket(socket); if (worker != null) worker.interrupt(); frames.clear();
+    }
+
+    private boolean enqueue(Outbound frame) {
+        if (frames.offerLast(frame)) return true;
+        frames.pollFirst(); droppedSamples.incrementAndGet(); return frames.offerLast(frame);
     }
 
     private void run() {
-        long reconnectDelayMs = 250;
+        long backoff = 250;
         while (running.get()) {
-            Socket activeSocket = null;
+            Socket active = null;
             try {
-                InetSocketAddress endpoint = discoverServer();
-                activeSocket = new Socket();
-                socket = activeSocket;
-                activeSocket.connect(endpoint, 1_000);
-                activeSocket.setKeepAlive(true);
-                activeSocket.setTcpNoDelay(true);
-                stream(activeSocket, new Connection(UUID.randomUUID().toString()));
-                reconnectDelayMs = 250;
-            } catch (IOException | JSONException error) {
+                active = new Socket(); socket = active; active.connect(discoverServer(), 1000);
+                active.setKeepAlive(true); active.setTcpNoDelay(true); stream(active, new Connection(UUID.randomUUID())); backoff = 250;
+            } catch (IOException error) {
                 if (running.get()) lastError = error.getClass().getSimpleName() + ": " + error.getMessage();
-            } finally {
-                connected.set(false);
-                closeSocket(activeSocket);
-            }
-            if (running.get()) {
-                try {
-                    Thread.sleep(reconnectDelayMs);
-                } catch (InterruptedException ignored) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-                reconnectDelayMs = Math.min(reconnectDelayMs * 2, 2_000);
-            }
+            } finally { connected.set(false); closeSocket(active); }
+            if (running.get()) try { Thread.sleep(backoff); backoff = Math.min(backoff * 2, 2000); }
+            catch (InterruptedException ignored) { Thread.currentThread().interrupt(); return; }
         }
     }
 
-    private void stream(Socket activeSocket, Connection connection) throws IOException, JSONException {
-        DataOutputStream output = new DataOutputStream(new BufferedOutputStream(activeSocket.getOutputStream()));
-        DataInputStream input = new DataInputStream(new BufferedInputStream(activeSocket.getInputStream()));
-        writeFrame(output, connection, "hello", SystemClock.elapsedRealtimeNanos(), helloData());
-        output.flush();
-        activeSocket.setSoTimeout(1_500);
-        validateHelloAck(readFrame(input), connection.connectionId);
-        activeSocket.setSoTimeout(0);
-        writeFrame(output, connection, "catalog", SystemClock.elapsedRealtimeNanos(), catalogData());
-        output.flush();
-        connected.set(true);
-        lastError = null;
-
+    private void stream(Socket active, Connection connection) throws IOException {
+        DataOutputStream output = new DataOutputStream(new BufferedOutputStream(active.getOutputStream()));
+        DataInputStream input = new DataInputStream(new BufferedInputStream(active.getInputStream()));
+        send(output, connection, SystemClock.elapsedRealtimeNanos(), value -> value.setHello(hello())); output.flush();
+        active.setSoTimeout(1500); validateHelloAck(readFrame(input), connection.id); active.setSoTimeout(0);
+        send(output, connection, SystemClock.elapsedRealtimeNanos(), value -> value.setSchema(schema())); output.flush();
+        connected.set(true); lastError = null;
         long lastHeartbeat = SystemClock.elapsedRealtimeNanos();
-        while (running.get() && !activeSocket.isClosed()) {
-            Sample sample;
-            try {
-                sample = samples.pollFirst(250, TimeUnit.MILLISECONDS);
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-            if (sample != null) {
-                writeFrame(output, connection, "sample", sample.robotTimeNs, sample.toJson());
-                output.flush();
-            }
+        while (running.get() && !active.isClosed()) {
+            Outbound first;
+            try { first = frames.pollFirst(250, TimeUnit.MILLISECONDS); }
+            catch (InterruptedException ignored) { Thread.currentThread().interrupt(); return; }
+            if (first instanceof Sample) {
+                List<Sample> batch = new ArrayList<>(); batch.add((Sample) first);
+                long deadline = SystemClock.elapsedRealtime() + BATCH_WINDOW_MS;
+                while (batch.size() < MAX_BATCH && SystemClock.elapsedRealtime() < deadline) {
+                    Outbound next = frames.pollFirst();
+                    if (!(next instanceof Sample)) { if (next != null) frames.offerFirst(next); break; }
+                    batch.add((Sample) next);
+                }
+                send(output, connection, batch.get(batch.size() - 1).robotTimeNs, value -> value.setSampleBatch(sampleBatch(batch))); output.flush();
+            } else if (first != null) { send(output, connection, first.robotTimeNs(), first::apply); output.flush(); }
             long now = SystemClock.elapsedRealtimeNanos();
             if (now - lastHeartbeat >= HEARTBEAT_INTERVAL_NS) {
-                JSONObject heartbeat = new JSONObject();
-                heartbeat.put("queuedFrames", samples.size());
-                heartbeat.put("droppedSamples", Long.toString(droppedSamples.get()));
-                heartbeat.put("lastSampleSequence", Long.toString(Math.max(-1L, nextSampleSequence.get() - 1)));
-                writeFrame(output, connection, "heartbeat", now, heartbeat);
-                output.flush();
-                lastHeartbeat = now;
+                Heartbeat.Builder heartbeat = Heartbeat.newBuilder().setQueuedFrames(frames.size()).setDroppedSamples(droppedSamples.get());
+                long last = nextSample.get() - 1; if (last >= 0) heartbeat.setLastSampleSequence(last);
+                send(output, connection, now, value -> value.setHeartbeat(heartbeat)); output.flush(); lastHeartbeat = now;
             }
         }
     }
 
-    private InetSocketAddress discoverServer() throws IOException, JSONException {
-        String requestId = UUID.randomUUID().toString();
-        JSONObject request = new JSONObject();
-        request.put("protocol_version", VERSION);
-        request.put("kind", "where_is_data_server");
-        request.put("request_id", requestId);
-        byte[] encoded = request.toString().getBytes(StandardCharsets.UTF_8);
+    private InetSocketAddress discoverServer() throws IOException {
+        UUID requestId = UUID.randomUUID(); byte[] request = discoveryRequest(requestId);
         try (DatagramSocket udp = new DatagramSocket()) {
-            udp.setBroadcast(true);
-            udp.setSoTimeout(1_000);
-            for (InetAddress broadcast : broadcastAddresses()) {
-                udp.send(new DatagramPacket(encoded, encoded.length, broadcast, discoveryPort));
-            }
-            byte[] replyBytes = new byte[1024];
-            DatagramPacket reply = new DatagramPacket(replyBytes, replyBytes.length);
-            while (running.get()) {
-                udp.receive(reply);
-                JSONObject response = new JSONObject(new String(reply.getData(), reply.getOffset(), reply.getLength(), StandardCharsets.UTF_8));
-                if (VERSION == response.optInt("protocol_version", -1)
-                        && "data_server".equals(response.optString("kind"))
-                        && requestId.equals(response.optString("request_id"))) {
-                    String host = response.optString("host");
-                    int port = response.optInt("port", -1);
-                    if (!host.isEmpty() && port > 0 && port <= 65_535) return new InetSocketAddress(host, port);
-                }
-            }
+            udp.setBroadcast(true); udp.setSoTimeout(1000);
+            for (InetAddress broadcast : broadcastAddresses()) udp.send(new DatagramPacket(request, request.length, broadcast, discoveryPort));
+            byte[] bytes = new byte[DISCOVERY_RESPONSE_BYTES]; DatagramPacket response = new DatagramPacket(bytes, bytes.length);
+            while (running.get()) { udp.receive(response); int port = discoveryResponsePort(response.getData(), response.getOffset(), response.getLength(), requestId); if (port > 0) return new InetSocketAddress(response.getAddress(), port); }
         }
         throw new IOException("telemetry discovery stopped");
     }
 
-    /** Send discovery over every active network, including the FTC Wi-Fi Direct adapter. */
     private Iterable<InetAddress> broadcastAddresses() throws IOException {
-        LinkedHashMap<String, InetAddress> directAddresses = new LinkedHashMap<>();
-        LinkedHashMap<String, InetAddress> fallbackAddresses = new LinkedHashMap<>();
+        LinkedHashMap<String, InetAddress> direct = new LinkedHashMap<>(), fallback = new LinkedHashMap<>();
         Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
-        if (interfaces != null) {
-            for (NetworkInterface networkInterface : Collections.list(interfaces)) {
-                if (!networkInterface.isUp() || networkInterface.isLoopback()) continue;
-                boolean isWifiDirect = networkInterface.getName().toLowerCase().contains("p2p");
-                for (InterfaceAddress interfaceAddress : networkInterface.getInterfaceAddresses()) {
-                    InetAddress broadcast = interfaceAddress.getBroadcast();
-                    if (broadcast != null) {
-                        fallbackAddresses.put(broadcast.getHostAddress(), broadcast);
-                        if (isWifiDirect) directAddresses.put(broadcast.getHostAddress(), broadcast);
-                    }
-                }
+        if (interfaces != null) for (NetworkInterface network : Collections.list(interfaces)) {
+            if (!network.isUp() || network.isLoopback()) continue;
+            boolean wifiDirect = network.getName().toLowerCase().contains("p2p");
+            for (InterfaceAddress address : network.getInterfaceAddresses()) if (address.getBroadcast() != null) {
+                InetAddress broadcast = address.getBroadcast(); fallback.put(broadcast.getHostAddress(), broadcast); if (wifiDirect) direct.put(broadcast.getHostAddress(), broadcast);
             }
         }
-        // A phone can have normal Wi-Fi and Wi-Fi Direct active at the same
-        // time. Telemetry must stay on the robot's Wi-Fi Direct network; do
-        // not race a home-network discovery reply when Direct is available.
-        if (!directAddresses.isEmpty()) return directAddresses.values();
-        InetAddress globalBroadcast = InetAddress.getByName("255.255.255.255");
-        fallbackAddresses.put(globalBroadcast.getHostAddress(), globalBroadcast);
-        return fallbackAddresses.values();
+        if (!direct.isEmpty()) return direct.values();
+        InetAddress global = InetAddress.getByName("255.255.255.255"); fallback.put(global.getHostAddress(), global); return fallback.values();
     }
 
-    private JSONObject helloData() throws JSONException {
-        JSONObject data = new JSONObject();
-        data.put("robotId", "android-" + Build.MODEL.replace(' ', '-'));
-        data.put("robotName", "FTC Robot Controller");
-        data.put("opModeName", opModeName);
-        data.put("startedAtRobotTimeNs", Long.toString(SystemClock.elapsedRealtimeNanos()));
-        data.put("queueCapacity", QUEUE_CAPACITY);
-        JSONArray capabilities = new JSONArray();
-        capabilities.put("catalog"); capabilities.put("full-snapshot"); capabilities.put("events");
-        data.put("capabilities", capabilities);
-        return data;
+    private Hello hello() {
+        return Hello.newBuilder().setRobotId("android-" + Build.MODEL.replace(' ', '-')).setRobotName("FTC Robot Controller")
+                .setOpModeName(opModeName).setStartedAtRobotTimeNs(SystemClock.elapsedRealtimeNanos()).setQueueCapacity(QUEUE_CAPACITY)
+                .addCapabilities("schema").addCapabilities("sample-batches").addCapabilities("events").addCapabilities("gaps").build();
     }
 
-    private JSONObject catalogData() throws JSONException {
-        JSONObject data = new JSONObject();
-        data.put("schemaRevision", 1);
-        JSONArray encodedDevices = new JSONArray();
-        for (Device device : devices) encodedDevices.put(device.toJson());
-        JSONArray encodedSignals = new JSONArray();
-        for (Signal signal : signals) encodedSignals.put(signal.toJson());
-        data.put("devices", encodedDevices);
-        data.put("signals", encodedSignals);
-        return data;
+    private Schema schema() {
+        Schema.Builder result = Schema.newBuilder().setRevision(1); Map<String, Integer> numbers = new LinkedHashMap<>(); int nextDevice = 1;
+        for (Device device : devices) { numbers.put(device.id, nextDevice); result.addDevices(org.firstinspires.ftc.teamcode.data.protocol.Device.newBuilder().setDeviceId(nextDevice++).setKey(device.id).setLabel(device.label).setSubsystem(device.subsystem).setDeviceType(device.deviceType)); }
+        int nextChannel = 1;
+        for (Signal signal : signals) {
+            signal.channelId = nextChannel++;
+            Channel.Builder channel = Channel.newBuilder().setChannelId(signal.channelId).setKey(signal.id).setLabel(signal.label).setQuantity(signal.quantity).setUnit(signal.unit).setValueType(signal.valueType).setRole(signal.role);
+            if (signal.deviceId != null) channel.setDeviceId(numbers.get(signal.deviceId)); if (signal.sampleHintHz > 0) channel.setSampleHintHz(signal.sampleHintHz); result.addChannels(channel);
+        }
+        return result.build();
     }
 
-    private void writeFrame(DataOutputStream output, Connection connection, String type, long robotTimeNs, JSONObject data)
-            throws IOException, JSONException {
-        JSONObject envelope = new JSONObject();
-        envelope.put("protocol", "ftc-telemetry");
-        envelope.put("version", VERSION);
-        envelope.put("type", type);
-        envelope.put("sessionId", sessionId);
-        envelope.put("connectionId", connection.connectionId);
-        envelope.put("sequence", Long.toString(connection.nextSequence++));
-        envelope.put("robotTimeNs", Long.toString(robotTimeNs));
-        envelope.put("data", data);
-        byte[] bytes = envelope.toString().getBytes(StandardCharsets.UTF_8);
-        output.writeInt(bytes.length);
-        output.write(bytes);
+    private SampleBatch sampleBatch(List<Sample> samples) {
+        SampleBatch.Builder batch = SampleBatch.newBuilder();
+        for (Sample sample : samples) {
+            Snapshot.Builder snapshot = Snapshot.newBuilder().setSampleSequence(sample.sequence).setSchemaRevision(1);
+            for (Signal signal : signals) snapshot.addValues(value(signal, sample.values.get(signal.id))); batch.addSnapshots(snapshot);
+        }
+        return batch.build();
     }
 
-    private static JSONObject readFrame(DataInputStream input) throws IOException, JSONException {
-        int length = input.readInt();
-        if (length <= 0 || length > MAX_FRAME_BYTES) throw new IOException("invalid server frame length");
-        byte[] bytes = new byte[length];
-        input.readFully(bytes);
-        return new JSONObject(new String(bytes, StandardCharsets.UTF_8));
-    }
-
-    private void validateHelloAck(JSONObject response, String connectionId) throws IOException {
-        JSONObject data = response.optJSONObject("data");
-        if (!"ftc-telemetry".equals(response.optString("protocol"))
-                || response.optInt("version", -1) != VERSION
-                || !"hello_ack".equals(response.optString("type"))
-                || !sessionId.equals(response.optString("sessionId"))
-                || !connectionId.equals(response.optString("connectionId"))
-                || data == null || !data.optBoolean("accepted", false)) {
-            throw new IOException("telemetry server rejected hello");
+    private static ChannelValue value(Signal signal, Object raw) {
+        ChannelValue.Builder result = ChannelValue.newBuilder().setChannelId(signal.channelId);
+        if (raw == null || (raw instanceof Double && !Double.isFinite((Double) raw)) || (raw instanceof Float && !Float.isFinite((Float) raw))) return result.setUnavailable(true).build();
+        switch (signal.valueType) {
+            case FLOAT64: if (!(raw instanceof Number)) throw invalid(signal, "numeric"); return result.setFloat64Value(((Number) raw).doubleValue()).build();
+            case INT64: if (!(raw instanceof Number)) throw invalid(signal, "integer"); return result.setInt64Value(((Number) raw).longValue()).build();
+            case BOOLEAN: if (!(raw instanceof Boolean)) throw invalid(signal, "boolean"); return result.setBooleanValue((Boolean) raw).build();
+            case STRING: case ENUM: return result.setStringValue(String.valueOf(raw)).build();
+            default: throw new IllegalArgumentException(signal.id + " uses an unsupported structured value type");
         }
     }
+
+    private static IllegalArgumentException invalid(Signal signal, String expected) { return new IllegalArgumentException(signal.id + " must be " + expected); }
+    private void send(DataOutputStream output, Connection connection, long robotTimeNs, Populator body) throws IOException {
+        Envelope.Builder envelope = Envelope.newBuilder().setProtocolVersion(VERSION).setSessionId(uuid(sessionId)).setConnectionId(uuid(connection.id)).setConnectionSequence(connection.nextSequence++).setRobotElapsedNs(robotTimeNs);
+        body.apply(envelope); byte[] bytes = envelope.build().toByteArray();
+        if (bytes.length == 0 || bytes.length > MAX_FRAME_BYTES) throw new IOException("invalid telemetry frame size"); output.writeInt(bytes.length); output.write(bytes);
+    }
+    private static Envelope readFrame(DataInputStream input) throws IOException { int length = input.readInt(); if (length <= 0 || length > MAX_FRAME_BYTES) throw new IOException("invalid server frame length"); byte[] bytes = new byte[length]; input.readFully(bytes); return Envelope.parseFrom(bytes); }
+    private void validateHelloAck(Envelope response, UUID connectionId) throws IOException { if (response.getProtocolVersion() != VERSION || response.getBodyCase() != Envelope.BodyCase.HELLO_ACK || !response.getSessionId().equals(uuid(sessionId)) || !response.getConnectionId().equals(uuid(connectionId)) || !response.getHelloAck().getAccepted()) throw new IOException("telemetry server rejected hello"); }
 
     private void validateCatalog() {
-        if (signals.isEmpty()) throw new IllegalStateException("at least one signal is required");
-        Set<String> deviceIds = new LinkedHashSet<>();
+        if (signals.isEmpty()) throw new IllegalStateException("at least one signal is required"); Set<String> deviceIds = new LinkedHashSet<>(), signalIds = new LinkedHashSet<>();
         for (Device device : devices) if (!deviceIds.add(device.id)) throw new IllegalStateException("duplicate device " + device.id);
-        Set<String> signalIds = new LinkedHashSet<>();
-        for (Signal signal : signals) {
-            if (!signalIds.add(signal.id)) throw new IllegalStateException("duplicate signal " + signal.id);
-            if (signal.deviceId != null && !deviceIds.contains(signal.deviceId)) throw new IllegalStateException("unknown device " + signal.deviceId);
-        }
+        for (Signal signal : signals) { if (!signalIds.add(signal.id)) throw new IllegalStateException("duplicate signal " + signal.id); if (signal.deviceId != null && !deviceIds.contains(signal.deviceId)) throw new IllegalStateException("unknown device " + signal.deviceId); }
     }
+    private void installStandardSignals() {
+        for (Signal signal : signals) if (LOOP_TIME_SIGNAL_ID.equals(signal.id)) return;
+        signals.add(new Signal(LOOP_TIME_SIGNAL_ID, "Loop Time", null, "loopTime", "ms", "float64", "diagnostic", 0));
+    }
+    private Set<String> signalIds() { Set<String> ids = new LinkedHashSet<>(); for (Signal signal : signals) ids.add(signal.id); return ids; }
+    private void ensureNotStarted() { if (running.get()) throw new IllegalStateException("catalog cannot change after start"); }
+    private void closeSocket(Socket candidate) { if (candidate != null) try { candidate.close(); } catch (IOException ignored) { } }
 
-    private Set<String> signalIds() {
-        Set<String> ids = new LinkedHashSet<>();
-        for (Signal signal : signals) ids.add(signal.id);
-        return ids;
+    private static byte[] discoveryRequest(UUID id) { return ByteBuffer.allocate(DISCOVERY_REQUEST_BYTES).order(ByteOrder.BIG_ENDIAN).put(DISCOVERY_MAGIC).put((byte) VERSION).putLong(id.getMostSignificantBits()).putLong(id.getLeastSignificantBits()).array(); }
+    private static int discoveryResponsePort(byte[] data, int offset, int length, UUID id) {
+        if (length != DISCOVERY_RESPONSE_BYTES) return -1; ByteBuffer buffer = ByteBuffer.wrap(data, offset, length).order(ByteOrder.BIG_ENDIAN);
+        for (byte expected : DISCOVERY_MAGIC) if (buffer.get() != expected) return -1;
+        if ((buffer.get() & 0xff) != VERSION || buffer.getLong() != id.getMostSignificantBits() || buffer.getLong() != id.getLeastSignificantBits()) return -1;
+        int port = buffer.getShort() & 0xffff; return port == 0 ? -1 : port;
     }
+    private static ByteString uuid(UUID id) { return ByteString.copyFrom(ByteBuffer.allocate(16).order(ByteOrder.BIG_ENDIAN).putLong(id.getMostSignificantBits()).putLong(id.getLeastSignificantBits()).array()); }
 
-    private void ensureNotStarted() {
-        if (running.get()) throw new IllegalStateException("catalog cannot change after start");
-    }
-
-    private void closeSocket(Socket candidate) {
-        if (candidate == null) return;
-        if (socket == candidate) socket = null;
-        try { candidate.close(); } catch (IOException ignored) { }
-    }
-
-    private static Object jsonValue(Object value) throws JSONException {
-        if (value == null) return JSONObject.NULL;
-        if (value instanceof Double && !Double.isFinite((Double) value)) return JSONObject.NULL;
-        if (value instanceof Float && !Float.isFinite((Float) value)) return JSONObject.NULL;
-        if (value instanceof Number || value instanceof String || value instanceof Boolean || value instanceof JSONObject || value instanceof JSONArray) return value;
-        return String.valueOf(value);
-    }
-
-    private static final class Device {
-        final String id, label, subsystem, deviceType;
-        Device(String id, String label, String subsystem, String deviceType) { this.id = text(id); this.label = text(label); this.subsystem = text(subsystem); this.deviceType = text(deviceType); }
-        JSONObject toJson() throws JSONException { JSONObject value = new JSONObject(); value.put("id", id); value.put("label", label); value.put("subsystem", subsystem); value.put("deviceType", deviceType); return value; }
-    }
-
-    private static final class Signal {
-        final String id, label, deviceId, quantity, unit, valueType, role;
-        final double sampleHintHz;
-        Signal(String id, String label, String deviceId, String quantity, String unit, String valueType, String role, double sampleHintHz) {
-            this.id = text(id); this.label = text(label); this.deviceId = deviceId; this.quantity = text(quantity); this.unit = text(unit); this.valueType = text(valueType); this.role = text(role); this.sampleHintHz = sampleHintHz;
-        }
-        JSONObject toJson() throws JSONException { JSONObject value = new JSONObject(); value.put("id", id); value.put("label", label); if (deviceId != null) value.put("deviceId", deviceId); value.put("quantity", quantity); value.put("unit", unit); value.put("valueType", valueType); value.put("role", role); if (sampleHintHz > 0) value.put("sampleHintHz", sampleHintHz); return value; }
-    }
-
-    private static final class Sample {
-        final long robotTimeNs, sequence;
-        final Map<String, Object> values;
-        Sample(long robotTimeNs, long sequence, Map<String, Object> values) { this.robotTimeNs = robotTimeNs; this.sequence = sequence; this.values = values; }
-        JSONObject toJson() throws JSONException { JSONObject data = new JSONObject(); data.put("sampleSequence", Long.toString(sequence)); data.put("schemaRevision", 1); JSONObject encoded = new JSONObject(); for (Map.Entry<String, Object> entry : values.entrySet()) encoded.put(entry.getKey(), jsonValue(entry.getValue())); data.put("values", encoded); return data; }
-    }
-
-    private static final class Connection {
-        final String connectionId;
-        long nextSequence;
-        Connection(String connectionId) { this.connectionId = connectionId; }
-    }
-
-    private static String text(String value) {
-        if (value == null || value.trim().isEmpty()) throw new IllegalArgumentException("catalog text must not be blank");
-        return value;
-    }
+    private interface Populator { void apply(Envelope.Builder envelope); }
+    private interface Outbound { long robotTimeNs(); void apply(Envelope.Builder envelope); }
+    private static final class Sample implements Outbound { final long robotTimeNs, sequence; final Map<String, Object> values; Sample(long robotTimeNs, long sequence, Map<String, Object> values) { this.robotTimeNs = robotTimeNs; this.sequence = sequence; this.values = values; } public long robotTimeNs() { return robotTimeNs; } public void apply(Envelope.Builder ignored) { throw new UnsupportedOperationException("samples are batched"); } }
+    private static final class GamepadFrame implements Outbound { final long time; final GamepadSnapshot snapshot; GamepadFrame(long time, Gamepad one, Gamepad two) { this.time = time; snapshot = GamepadSnapshot.newBuilder().setGamepad1(gamepad(one)).setGamepad2(gamepad(two)).build(); } public long robotTimeNs() { return time; } public void apply(Envelope.Builder envelope) { envelope.setGamepad(snapshot); } }
+    private static org.firstinspires.ftc.teamcode.data.protocol.Gamepad gamepad(Gamepad source) { return org.firstinspires.ftc.teamcode.data.protocol.Gamepad.newBuilder().setLeftStickX(source.left_stick_x).setLeftStickY(source.left_stick_y).setRightStickX(source.right_stick_x).setRightStickY(source.right_stick_y).setLeftTrigger(source.left_trigger).setRightTrigger(source.right_trigger).setA(source.a).setB(source.b).setX(source.x).setY(source.y).setDpadUp(source.dpad_up).setDpadDown(source.dpad_down).setDpadLeft(source.dpad_left).setDpadRight(source.dpad_right).setLeftBumper(source.left_bumper).setRightBumper(source.right_bumper).setLeftStickButton(source.left_stick_button).setRightStickButton(source.right_stick_button).setBack(source.back).setStart(source.start).setGuide(source.guide).build(); }
+    private static final class Device { final String id, label, subsystem, deviceType; Device(String id, String label, String subsystem, String deviceType) { this.id = text(id); this.label = text(label); this.subsystem = text(subsystem); this.deviceType = text(deviceType); } }
+    private static final class Signal { final String id, label, deviceId, quantity, unit; final ValueType valueType; final ChannelRole role; final double sampleHintHz; int channelId; Signal(String id, String label, String deviceId, String quantity, String unit, String type, String role, double sampleHintHz) { this.id = text(id); this.label = text(label); this.deviceId = deviceId; this.quantity = text(quantity); this.unit = text(unit); this.valueType = ValueType.valueOf(text(type).toUpperCase()); this.role = ChannelRole.valueOf(text(role).toUpperCase()); this.sampleHintHz = sampleHintHz; } }
+    private static final class Connection { final UUID id; long nextSequence; Connection(UUID id) { this.id = id; } }
+    private static String text(String value) { if (value == null || value.trim().isEmpty()) throw new IllegalArgumentException("catalog text must not be blank"); return value; }
 }

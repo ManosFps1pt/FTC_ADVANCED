@@ -102,6 +102,29 @@ class TelemetryStoreTests(unittest.TestCase):
         self.assertEqual(["telemetry_session"], [update.kind for update in updates])
         self.assertFalse(self.store.status()["activeSession"]["active"])
 
+    def test_gamepad_frames_are_replayed_with_the_session(self) -> None:
+        self.start_session()
+        state = {
+            "leftStickX": 0.25, "leftStickY": -0.5, "rightStickX": 0.0, "rightStickY": 1.0,
+            "leftTrigger": 0.0, "rightTrigger": 0.75,
+            "a": True, "b": False, "x": False, "y": False,
+            "dpadUp": False, "dpadDown": False, "dpadLeft": True, "dpadRight": False,
+            "leftBumper": False, "rightBumper": True,
+            "leftStickButton": False, "rightStickButton": False,
+            "back": False, "start": False, "guide": False,
+        }
+
+        updates = self.store.ingest(
+            self.envelope("gamepad", {"gamepad1": state, "gamepad2": {**state, "a": False, "b": True}}),
+            received_monotonic_ns=3,
+        )
+
+        self.assertEqual("telemetry_gamepad", updates[0].kind)
+        replay = self.store.live_state()["gamepadFrames"]
+        self.assertEqual(1, len(replay))
+        self.assertTrue(replay[0]["gamepad1"]["a"])
+        self.assertTrue(replay[0]["gamepad2"]["b"])
+
 
 if __name__ == "__main__":
     unittest.main()

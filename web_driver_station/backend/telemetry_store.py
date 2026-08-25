@@ -28,6 +28,12 @@ _UINT64 = re.compile(r"^(?:0|[1-9][0-9]*)$")
 _VALUE_TYPES = {"float64", "int64", "boolean", "string", "enum", "vector2", "vector3", "pose2d"}
 _ROLES = {"measured", "target", "command", "error", "status", "diagnostic"}
 _SEVERITIES = {"debug", "info", "warning", "error", "critical"}
+_GAMEPAD_AXES = ("leftStickX", "leftStickY", "rightStickX", "rightStickY")
+_GAMEPAD_TRIGGERS = ("leftTrigger", "rightTrigger")
+_GAMEPAD_BUTTONS = (
+    "a", "b", "x", "y", "dpadUp", "dpadDown", "dpadLeft", "dpadRight",
+    "leftBumper", "rightBumper", "leftStickButton", "rightStickButton", "back", "start", "guide",
+)
 
 
 class TelemetryProtocolError(ValueError):
@@ -105,6 +111,31 @@ def _validate_value(value: object, value_type: str, signal_id: str) -> Any:
             _finite_number(object_value[field_name], f"{signal_id}.{field_name}")
         return dict(object_value)
     raise TelemetryProtocolError(f"Unsupported value type {value_type}")
+
+
+def _validate_gamepad(value: object, field_name: str) -> dict[str, Any]:
+    """Validate the compact, display-oriented gamepad envelope."""
+
+    state = _require_object(value, field_name)
+    expected = set(_GAMEPAD_AXES) | set(_GAMEPAD_TRIGGERS) | set(_GAMEPAD_BUTTONS)
+    if set(state) != expected:
+        raise TelemetryProtocolError(f"{field_name} must contain the complete standard gamepad state")
+    normalized: dict[str, Any] = {}
+    for axis in _GAMEPAD_AXES:
+        numeric = _finite_number(state[axis], f"{field_name}.{axis}")
+        if not -1 <= numeric <= 1:
+            raise TelemetryProtocolError(f"{field_name}.{axis} must be between -1 and 1")
+        normalized[axis] = numeric
+    for trigger in _GAMEPAD_TRIGGERS:
+        numeric = _finite_number(state[trigger], f"{field_name}.{trigger}")
+        if not 0 <= numeric <= 1:
+            raise TelemetryProtocolError(f"{field_name}.{trigger} must be between 0 and 1")
+        normalized[trigger] = numeric
+    for button in _GAMEPAD_BUTTONS:
+        if not isinstance(state[button], bool):
+            raise TelemetryProtocolError(f"{field_name}.{button} must be a boolean")
+        normalized[button] = state[button]
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +221,22 @@ class TelemetrySnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class GamepadSnapshot:
+    """One timestamped pair of FTC gamepad states for replay and overlay use."""
+
+    robot_time_ns: str
+    gamepad1: dict[str, Any]
+    gamepad2: dict[str, Any]
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "robotTimeNs": self.robot_time_ns,
+            "gamepad1": self.gamepad1,
+            "gamepad2": self.gamepad2,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class TelemetryEvent:
     name: str
     severity: str
@@ -213,6 +260,7 @@ class TelemetrySession:
     opmode_name: str = ""
     catalog: TelemetryCatalog | None = None
     snapshots: deque[TelemetrySnapshot] = field(default_factory=deque)
+    gamepad_frames: deque[GamepadSnapshot] = field(default_factory=deque)
     events: deque[TelemetryEvent] = field(default_factory=deque)
     gaps: deque[dict[str, str] | dict[str, Any]] = field(default_factory=deque)
     latest_snapshot: TelemetrySnapshot | None = None
@@ -232,6 +280,7 @@ class TelemetrySession:
             "schemaRevision": self.catalog.revision if self.catalog else None,
             "signalCount": len(self.catalog.signals) if self.catalog else 0,
             "snapshotCount": len(self.snapshots),
+            "gamepadFrameCount": len(self.gamepad_frames),
             "eventCount": len(self.events),
             "gapCount": len(self.gaps),
             "droppedSamples": self.dropped_samples,
@@ -250,7 +299,9 @@ class TelemetryUpdate:
 class TelemetryStore:
     """Keep bounded structured telemetry history for one or more OpMode sessions."""
 
-    def __init__(self, *, max_snapshots_per_session: int = 1_500, max_events_per_session: int = 500) -> None:
+    # Loop-time instrumentation can publish hundreds of snapshots per second. Retain
+    # enough samples for the dashboard's 10-second time window at that rate.
+    def __init__(self, *, max_snapshots_per_session: int = 12_000, max_events_per_session: int = 500) -> None:
         if max_snapshots_per_session <= 0 or max_events_per_session <= 0:
             raise ValueError("history limits must be positive")
         self._max_snapshots = max_snapshots_per_session
@@ -293,6 +344,8 @@ class TelemetryStore:
                         update = self._ingest_catalog(session, common)
                     elif message_type == "sample":
                         update = self._ingest_sample(session, common, received_monotonic_ns, received_at_ms)
+                    elif message_type == "gamepad":
+                        update = self._ingest_gamepad(session, common)
                     elif message_type == "event":
                         update = self._ingest_event(session, common)
                     elif message_type == "gap":
@@ -341,7 +394,7 @@ class TelemetryStore:
                     updates.append(TelemetryUpdate("telemetry_session", session.summary()))
             return updates
 
-    def live_state(self, *, history_limit: int = 300) -> dict[str, Any]:
+    def live_state(self, *, history_limit: int = 12_000) -> dict[str, Any]:
         """Return one browser-friendly bootstrap message for the active session."""
 
         if history_limit <= 0:
@@ -349,7 +402,7 @@ class TelemetryStore:
         with self._lock:
             session = self._current_session()
             if session is None:
-                return {"status": self.status(), "session": None, "catalog": None, "snapshots": [], "events": []}
+                return {"status": self.status(), "session": None, "catalog": None, "snapshots": [], "gamepadFrames": [], "events": []}
             snapshots = list(session.snapshots)[-history_limit:]
             events = list(session.events)[-history_limit:]
             return {
@@ -357,6 +410,7 @@ class TelemetryStore:
                 "session": session.summary(),
                 "catalog": session.catalog.to_wire() if session.catalog else None,
                 "snapshots": [snapshot.to_wire() for snapshot in snapshots],
+                "gamepadFrames": [frame.to_wire() for frame in list(session.gamepad_frames)[-history_limit:]],
                 "events": [event.to_wire() for event in events],
             }
 
@@ -391,6 +445,7 @@ class TelemetryStore:
             session = TelemetrySession(
                 id=session_id,
                 snapshots=deque(maxlen=self._max_snapshots),
+                gamepad_frames=deque(maxlen=self._max_snapshots),
                 events=deque(maxlen=self._max_events),
                 gaps=deque(maxlen=self._max_events),
             )
@@ -508,6 +563,17 @@ class TelemetryStore:
         session.snapshots.append(snapshot)
         session.latest_snapshot = snapshot
         return [TelemetryUpdate("telemetry_snapshot", snapshot.to_wire()), TelemetryUpdate("telemetry_session", session.summary())]
+
+    def _ingest_gamepad(self, session: TelemetrySession, common: Mapping[str, Any]) -> list[TelemetryUpdate]:
+        data = common["data"]
+        assert isinstance(data, Mapping)
+        frame = GamepadSnapshot(
+            robot_time_ns=common["robotTimeNs"],
+            gamepad1=_validate_gamepad(data.get("gamepad1"), "gamepad.data.gamepad1"),
+            gamepad2=_validate_gamepad(data.get("gamepad2"), "gamepad.data.gamepad2"),
+        )
+        session.gamepad_frames.append(frame)
+        return [TelemetryUpdate("telemetry_gamepad", frame.to_wire()), TelemetryUpdate("telemetry_session", session.summary())]
 
     def _ingest_event(self, session: TelemetrySession, common: Mapping[str, Any]) -> list[TelemetryUpdate]:
         data = common["data"]

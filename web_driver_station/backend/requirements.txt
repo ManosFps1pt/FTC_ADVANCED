@@ -1,2 +1,4 @@
 fastapi>=0.115,<1
 uvicorn[standard]>=0.30,<1
+# Runtime used by the checked-in v2 robot telemetry protobuf bindings.
+protobuf>=5.26.1,<6

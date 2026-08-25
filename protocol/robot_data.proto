@@ -1,0 +1,175 @@
+syntax = "proto3";
+
+package ftc.robotdata.v2;
+
+option java_package = "org.firstinspires.ftc.teamcode.data.protocol";
+option java_multiple_files = true;
+
+// Protocol version 2 replaces the debug JSON transport with protobuf. The
+// length prefix belongs to the TCP transport, not to this message.
+message Envelope {
+  uint32 protocol_version = 1;
+  bytes session_id = 2;            // 16-byte RFC 4122 UUID
+  bytes connection_id = 3;         // 16-byte RFC 4122 UUID
+  uint64 connection_sequence = 4;
+  uint64 robot_elapsed_ns = 5;
+
+  oneof body {
+    Hello hello = 10;
+    HelloAck hello_ack = 11;
+    Schema schema = 12;
+    SampleBatch sample_batch = 13;
+    Event event = 14;
+    Heartbeat heartbeat = 15;
+    Gap gap = 16;
+    SessionEnd session_end = 17;
+    GamepadSnapshot gamepad = 18;
+    ProtocolError error = 19;
+  }
+}
+
+message Hello {
+  string robot_id = 1;
+  string robot_name = 2;
+  string op_mode_name = 3;
+  uint64 started_at_robot_time_ns = 4;
+  uint32 queue_capacity = 5;
+  repeated string capabilities = 6;
+}
+
+message HelloAck {
+  bool accepted = 1;
+  uint64 server_time_ns = 2;
+  bool session_resumed = 3;
+  string reason = 4;
+}
+
+message Schema {
+  uint32 revision = 1;
+  repeated Device devices = 2;
+  repeated Channel channels = 3;
+}
+
+message Device {
+  uint32 device_id = 1;
+  string key = 2;
+  string label = 3;
+  string subsystem = 4;
+  string device_type = 5;
+}
+
+message Channel {
+  uint32 channel_id = 1;
+  string key = 2;
+  string label = 3;
+  uint32 device_id = 4;            // zero means robot-wide
+  string quantity = 5;
+  string unit = 6;
+  ValueType value_type = 7;
+  ChannelRole role = 8;
+  double sample_hint_hz = 9;       // zero means unspecified
+  string description = 10;
+}
+
+enum ValueType {
+  VALUE_TYPE_UNSPECIFIED = 0;
+  FLOAT64 = 1;
+  INT64 = 2;
+  BOOLEAN = 3;
+  STRING = 4;
+  ENUM = 5;
+  VECTOR2 = 6;
+  VECTOR3 = 7;
+  POSE2D = 8;
+}
+
+enum ChannelRole {
+  CHANNEL_ROLE_UNSPECIFIED = 0;
+  MEASURED = 1;
+  TARGET = 2;
+  COMMAND = 3;
+  ERROR = 4;
+  STATUS = 5;
+  DIAGNOSTIC = 6;
+}
+
+message SampleBatch {
+  repeated Snapshot snapshots = 1;
+}
+
+message Snapshot {
+  uint64 sample_sequence = 1;
+  uint32 schema_revision = 2;
+  repeated ChannelValue values = 3;
+}
+
+message ChannelValue {
+  uint32 channel_id = 1;
+  oneof value {
+    double float64_value = 2;
+    sint64 int64_value = 3;
+    bool boolean_value = 4;
+    string string_value = 5;
+    Vector2 vector2_value = 6;
+    Vector3 vector3_value = 7;
+    Pose2d pose2d_value = 8;
+    bool unavailable = 9;          // must be true when present
+  }
+}
+
+message Vector2 { double x = 1; double y = 2; }
+message Vector3 { double x = 1; double y = 2; double z = 3; }
+message Pose2d { double x = 1; double y = 2; double heading_rad = 3; }
+
+message Event {
+  string name = 1;
+  Severity severity = 2;
+  repeated Attribute attributes = 3;
+}
+
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  DEBUG = 1;
+  INFO = 2;
+  WARNING = 3;
+  EVENT_ERROR = 4;
+  CRITICAL = 5;
+}
+
+message Attribute {
+  string key = 1;
+  oneof value {
+    string string_value = 2;
+    double number_value = 3;
+    bool boolean_value = 4;
+    bool null_value = 5;           // must be true when present
+  }
+}
+
+message Heartbeat {
+  uint32 queued_frames = 1;
+  uint64 dropped_samples = 2;
+  uint64 last_sample_sequence = 3;
+}
+
+message Gap {
+  uint64 first_missing_sample_sequence = 1;
+  uint64 last_missing_sample_sequence = 2;
+  string reason = 3;
+}
+
+message SessionEnd { string reason = 1; uint64 last_sample_sequence = 2; }
+
+message GamepadSnapshot { Gamepad gamepad1 = 1; Gamepad gamepad2 = 2; }
+message Gamepad {
+  float left_stick_x = 1; float left_stick_y = 2;
+  float right_stick_x = 3; float right_stick_y = 4;
+  float left_trigger = 5; float right_trigger = 6;
+  bool a = 7; bool b = 8; bool x = 9; bool y = 10;
+  bool dpad_up = 11; bool dpad_down = 12; bool dpad_left = 13; bool dpad_right = 14;
+  bool left_bumper = 15; bool right_bumper = 16;
+  bool left_stick_button = 17; bool right_stick_button = 18;
+  bool back = 19; bool start = 20; bool guide = 21;
+}
+
+message ProtocolError { string code = 1; string message = 2; }

@@ -35,6 +35,7 @@ from ftc_control_hub import (
 )
 from .robot_data_tcp_server import DEFAULT_HOST, DEFAULT_PORT, ReceivedRobotPacket, RobotDataTcpServer
 from .telemetry_store import TelemetryProtocolError, TelemetryStore, TelemetryUpdate
+from .protocol import robot_data_pb2 as wire
 
 
 class ConnectRequest(BaseModel):
@@ -132,6 +133,14 @@ class DriverStationService:
                     self._client = None
             client.close()
             raise
+        # A newly connected dashboard has not selected a user OpMode yet.
+        # The RC often reports its internal "$Stop$Robot$" sentinel as
+        # RUNNING; reflecting that directly makes the UI present a Stop button
+        # and forces users to stop the sentinel before choosing their OpMode.
+        # Start this local session at the neutral lifecycle state instead.
+        with self._lock:
+            if self._client is client:
+                self._confirmed_robot_state = RobotState.NOT_STARTED
         self._publish_from_thread("status", self.status())
         return self.status()
 
@@ -376,57 +385,56 @@ class RobotDataService:
     def telemetry_state(self) -> dict[str, Any]:
         return self._telemetry.live_state()
 
-    async def _on_packet(self, packet: ReceivedRobotPacket) -> Mapping[str, Any] | None:
+    async def _on_packet(self, packet: ReceivedRobotPacket) -> wire.Envelope | None:
         self._latest_packet = {
             "payload": dict(packet.payload),
             "peer": {"host": packet.peer[0], "port": packet.peer[1]} if packet.peer else None,
             "received_monotonic_ns": packet.received_monotonic_ns,
             "received_at_ms": int(time.time() * 1000),
         }
-        is_hello = packet.payload.get("protocol") == "ftc-telemetry" and packet.payload.get("type") == "hello"
-        resumed = is_hello and self._telemetry.has_session(packet.payload.get("sessionId"))
-        try:
-            updates = self._telemetry.ingest(
-                packet.payload,
-                received_monotonic_ns=packet.received_monotonic_ns,
-                received_at_ms=self._latest_packet["received_at_ms"],
-            )
-        except TelemetryProtocolError:
-            # The raw packet remains visible to help diagnose a bad robot-side
-            # implementation. The structured page shows the concise error.
-            updates = []
-            structured_accepted = False
-        else:
-            structured_accepted = True
-            if packet.peer is not None and packet.payload.get("protocol") == "ftc-telemetry":
-                connection_id = packet.payload.get("connectionId")
+        is_hello = packet.envelope.WhichOneof("body") == "hello"
+        resumed = is_hello and self._telemetry.has_session(packet.payloads[0].get("sessionId"))
+        updates: list[TelemetryUpdate] = []
+        structured_accepted = True
+        for payload in packet.payloads:
+            try:
+                updates.extend(self._telemetry.ingest(
+                    payload,
+                    received_monotonic_ns=packet.received_monotonic_ns,
+                    received_at_ms=self._latest_packet["received_at_ms"],
+                ))
+            except TelemetryProtocolError:
+                # Keep the decoded packet visible for diagnosis, but reject its
+                # handshake so the RC reconnects instead of streaming bad data.
+                structured_accepted = False
+                break
+            if packet.peer is not None:
+                connection_id = payload.get("connectionId")
                 if isinstance(connection_id, str):
                     self._connection_ids[packet.peer] = connection_id
         await self._broadcast_status()
         for update in updates:
             await self._broadcast_telemetry(update)
         if structured_accepted and is_hello:
-            return self._hello_ack(packet.payload, resumed=resumed)
+            return self._hello_ack(packet.envelope, resumed=resumed)
         return None
 
     @staticmethod
-    def _hello_ack(payload: Mapping[str, Any], *, resumed: bool) -> dict[str, Any]:
+    def _hello_ack(request: wire.Envelope, *, resumed: bool) -> wire.Envelope:
         """Accept a structured session before it sends its catalog and samples."""
 
-        return {
-            "protocol": "ftc-telemetry",
-            "version": 1,
-            "type": "hello_ack",
-            "sessionId": payload["sessionId"],
-            "connectionId": payload["connectionId"],
-            "sequence": "0",
-            "robotTimeNs": "0",
-            "data": {
-                "accepted": True,
-                "serverTimeNs": str(time.perf_counter_ns()),
-                "sessionDisposition": "resumed" if resumed else "new",
-            },
-        }
+        return wire.Envelope(
+            protocol_version=2,
+            session_id=request.session_id,
+            connection_id=request.connection_id,
+            connection_sequence=0,
+            robot_elapsed_ns=0,
+            hello_ack=wire.HelloAck(
+                accepted=True,
+                server_time_ns=time.perf_counter_ns(),
+                session_resumed=resumed,
+            ),
+        )
 
     async def _on_connection(self, connected: bool, peer: tuple[str, int] | None) -> None:
         if peer is not None:

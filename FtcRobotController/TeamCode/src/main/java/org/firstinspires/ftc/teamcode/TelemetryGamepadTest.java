@@ -1,7 +1,5 @@
 package org.firstinspires.ftc.teamcode;
 
-import android.os.SystemClock;
-
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.util.ElapsedTime;
@@ -22,11 +20,8 @@ import java.util.Map;
 public class TelemetryGamepadTest extends OpMode {
     private static final int DATA_SERVER_PORT = StructuredRobotDataClient.DEFAULT_PORT;
     private static final int DATA_DISCOVERY_PORT = StructuredRobotDataClient.DEFAULT_DISCOVERY_PORT;
-    private static final long DATA_PUBLISH_INTERVAL_NS = 20_000_000L; // 50 Hz
-
     private final ElapsedTime runtime = new ElapsedTime();
     private StructuredRobotDataClient dataClient;
-    private long lastDataPublishNs;
 
     @Override
     public void init() {
@@ -88,12 +83,18 @@ public class TelemetryGamepadTest extends OpMode {
             telemetry.addData("Data TCP error", dataClient.getLastError());
         }
 
-        long now = SystemClock.elapsedRealtimeNanos();
-        if (now - lastDataPublishNs >= DATA_PUBLISH_INTERVAL_NS) {
-            lastDataPublishNs = now;
-            dataClient.publishSample(createDataSnapshot(runtimeSeconds));
-        }
+        // Call once per FTC loop. The standard client automatically includes
+        // opmode.loopTimeMs in every TCP snapshot and publishes both gamepads.
+        dataClient.publishLoop(createDataSnapshot(runtimeSeconds), gamepad1, gamepad2);
         telemetry.update();
+
+        // Keep this diagnostic OpMode at a human-scale cadence so its graphs
+        // remain easy to inspect without producing hundreds of samples a second.
+        try {
+            Thread.sleep(10);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Override
