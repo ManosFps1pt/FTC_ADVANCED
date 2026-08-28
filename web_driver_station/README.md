@@ -98,3 +98,52 @@ The lifecycle control is a single state-aware button: **Init** when stopped,
 badge also shows a sampled ICMP network ping to the RC every two seconds; a
 dash means ICMP is unavailable or blocked even though the Robocol link may
 still be healthy.
+
+## Durable `.ftclog` telemetry recordings
+
+Every valid protobuf frame accepted from the independent robot-data TCP stream
+is now appended to `web_driver_station/recordings/<session-uuid>/raw/` as an
+`.ftclog`. This is independent of the browser's bounded live history: stopping
+an OpMode or losing its TCP connection finalizes the active file instead of
+erasing its snapshots. A reconnect for the same session starts a new numbered
+stream file, preserving the interruption explicitly.
+
+Each log contains a versioned header, then the exact protobuf frame bytes,
+laptop monotonic receipt timestamp, frame length, and CRC32 per record. An
+unexpected crash leaves a `.ftclog.partial` file whose complete records can be
+read safely up to its incomplete tail. Set `ROBOT_DATA_RECORDINGS_DIR` to put
+recordings somewhere other than the default directory.
+
+Use `GET /api/data/recordings` to list saved sessions, and download a finalized
+file with `GET /api/data/recordings/{session-id}/stream-00000.ftclog`.
+
+## Laptop video recording (first replay layer)
+
+The backend can record a locally attached webcam independently of the robot
+control and telemetry streams. It writes 60-second MP4 segments and a JSONL
+sidecar for every segment; each sidecar row maps an encoded frame index to the
+timestamp assigned immediately after OpenCV's `grab()` returns. This is the
+timestamp source used later to synchronize video with robot snapshots.
+
+Start the backend, then start a recording (camera index `0` is the default
+laptop webcam):
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/video/start `
+  -ContentType application/json `
+  -Body '{"device_index":0,"width":1280,"height":720,"fps":30,"segment_seconds":60,"camera_id":"cam0"}'
+```
+
+Stop it with:
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/video/stop
+```
+
+Recordings are written under `web_driver_station/recordings/<session-uuid>/`
+by default, or under `ROBOT_VIDEO_RECORDINGS_DIR` if set. Completed segments
+are available at `/api/video/sessions/{session-id}/segments/segment-00000.mp4`;
+the session list and recorder state are available at `/api/video/sessions` and
+`/api/video/status`. Camera auto-exposure and USB buffering mean the frame
+timestamp is not yet an exposure timestamp; the upcoming LED-marker layer will
+measure the corresponding camera delay rather than pretending it is zero.

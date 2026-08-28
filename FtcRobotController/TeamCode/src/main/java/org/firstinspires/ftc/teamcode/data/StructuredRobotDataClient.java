@@ -4,7 +4,12 @@ import android.os.Build;
 import android.os.SystemClock;
 
 import com.google.protobuf.ByteString;
+import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.Gamepad;
+import com.qualcomm.robotcore.hardware.VoltageSensor;
+import com.qualcomm.robotcore.util.ElapsedTime;
+
+import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 
 import org.firstinspires.ftc.teamcode.data.protocol.Channel;
 import org.firstinspires.ftc.teamcode.data.protocol.ChannelRole;
@@ -46,6 +51,7 @@ import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.DoubleSupplier;
 
 /** Publishes protobuf telemetry without blocking the OpMode thread. */
 public final class StructuredRobotDataClient implements Closeable {
@@ -63,16 +69,95 @@ public final class StructuredRobotDataClient implements Closeable {
     private final UUID sessionId = UUID.randomUUID();
     private final List<Device> devices = new ArrayList<>();
     private final List<Signal> signals = new ArrayList<>();
+    private final List<MotorBinding> motors = new ArrayList<>();
     private final LinkedBlockingDeque<Outbound> frames = new LinkedBlockingDeque<>(QUEUE_CAPACITY);
+    private final LinkedBlockingDeque<IncomingMessage> incoming = new LinkedBlockingDeque<>(64);
     private final AtomicLong nextSample = new AtomicLong(), droppedSamples = new AtomicLong(), lastLoopPublishNs = new AtomicLong();
     private final AtomicBoolean running = new AtomicBoolean(), connected = new AtomicBoolean();
     private volatile Socket socket;
     private volatile Thread worker;
     private volatile String lastError;
+    private VoltageSensor voltageSensor;
+    private DoubleSupplier runtimeSecondsSource;
+    private Gamepad boundGamepad1, boundGamepad2;
+
+    /** Creates a client using the standard laptop discovery and TCP ports. */
+    public StructuredRobotDataClient(String opModeName) {
+        this(DEFAULT_DISCOVERY_PORT, DEFAULT_PORT, opModeName);
+    }
 
     public StructuredRobotDataClient(int discoveryPort, int tcpPort, String opModeName) {
         if (discoveryPort <= 0 || discoveryPort > 65535 || tcpPort <= 0 || tcpPort > 65535) throw new IllegalArgumentException("ports must be between 1 and 65535");
         this.discoveryPort = discoveryPort; this.tcpPort = tcpPort; this.opModeName = text(opModeName);
+    }
+
+    /** Adds the standard OpMode runtime signal and captures it on every publishLoop call. */
+    public synchronized StructuredRobotDataClient addRuntime(ElapsedTime runtime) {
+        if (runtime == null) throw new IllegalArgumentException("runtime must not be null");
+        ensureNotStarted();
+        addSignal("opmode.runtimeSeconds", "OpMode Runtime", null,
+                "runtime", "s", "float64", "diagnostic", 50);
+        runtimeSecondsSource = runtime::seconds;
+        return this;
+    }
+
+    /** Adds robot voltage so motor electrical power can be reported in watts. */
+    public synchronized StructuredRobotDataClient addVoltageSensor(VoltageSensor sensor) {
+        if (sensor == null) throw new IllegalArgumentException("voltage sensor must not be null");
+        ensureNotStarted();
+        addSignal("robot.voltage", "Robot Voltage", null,
+                "voltage", "V", "float64", "measured", 50);
+        voltageSensor = sensor;
+        return this;
+    }
+
+    /**
+     * Registers a DcMotorEx and automatically adds its common diagnostic signals.
+     * The motor's current power is used for both commandedPower and appliedPower.
+     */
+    public synchronized StructuredRobotDataClient addMotor(String deviceId, String label, DcMotorEx motor) {
+        if (motor == null) throw new IllegalArgumentException("motor must not be null");
+        return addMotor(deviceId, label, motor, motor::getPower);
+    }
+
+    /**
+     * Registers a DcMotorEx and captures the supplied requested power separately
+     * from the motor's measured/applied power.
+     */
+    public synchronized StructuredRobotDataClient addMotor(
+            String deviceId, String label, DcMotorEx motor, DoubleSupplier commandedPower) {
+        if (motor == null) throw new IllegalArgumentException("motor must not be null");
+        if (commandedPower == null) throw new IllegalArgumentException("commandedPower must not be null");
+        ensureNotStarted();
+        addDevice(deviceId, label, "drivetrain", "REV DC motor");
+        addSignal(deviceId + ".commandedPower", label + " Commanded Power", deviceId,
+                "commandedPower", "normalized", "float64", "command", 50);
+        addSignal(deviceId + ".appliedPower", label + " Applied Power", deviceId,
+                "appliedPower", "normalized", "float64", "measured", 50);
+        addSignal(deviceId + ".encoderPosition", label + " Encoder Position", deviceId,
+                "position", "ticks", "int64", "measured", 50);
+        addSignal(deviceId + ".velocityTicksPerSecond", label + " Encoder Velocity", deviceId,
+                "velocity", "ticks/s", "float64", "measured", 50);
+        addSignal(deviceId + ".currentAmps", label + " Motor Current", deviceId,
+                "current", "A", "float64", "measured", 50);
+        addSignal(deviceId + ".electricalPowerWatts", label + " Motor Electrical Power", deviceId,
+                "electricalPower", "W", "float64", "measured", 50);
+        motors.add(new MotorBinding(deviceId, motor, commandedPower));
+        return this;
+    }
+
+    /**
+     * Registers both FTC gamepad objects and publishes their complete state as
+     * the compact dedicated GamepadSnapshot frame.
+     */
+    public synchronized StructuredRobotDataClient addGamepads(Gamepad gamepad1, Gamepad gamepad2) {
+        if (gamepad1 == null || gamepad2 == null) throw new IllegalArgumentException("gamepads must not be null");
+        ensureNotStarted();
+        addDevice("input.gamepad1", "Gamepad 1", "input", "gamepad");
+        addDevice("input.gamepad2", "Gamepad 2", "input", "gamepad");
+        boundGamepad1 = gamepad1;
+        boundGamepad2 = gamepad2;
+        return this;
     }
 
     public synchronized StructuredRobotDataClient addDevice(String id, String label, String subsystem, String deviceType) {
@@ -114,11 +199,40 @@ public final class StructuredRobotDataClient implements Closeable {
         return sampleQueued && gamepadsQueued;
     }
 
+    /** Captures all bound runtime, voltage, motor, and gamepad values and publishes one loop. */
+    public boolean publishLoop() {
+        if (!running.get()) return false;
+        boolean sampleQueued = publishSample(createDataSnapshot());
+        boolean gamepadsQueued = boundGamepad1 == null
+                ? true
+                : publishGamepads(boundGamepad1, boundGamepad2);
+        return sampleQueued && gamepadsQueued;
+    }
+
+    /** Captures the values configured through the convenience bindings. */
+    public Map<String, Object> createDataSnapshot() {
+        Map<String, Object> values = new LinkedHashMap<>();
+        if (runtimeSecondsSource != null) values.put("opmode.runtimeSeconds", runtimeSecondsSource.getAsDouble());
+        double robotVoltage = readVoltage();
+        if (voltageSensor != null) values.put("robot.voltage", robotVoltage);
+        for (MotorBinding motor : motors) motor.addValues(values, robotVoltage);
+        return values;
+    }
+
     public boolean publishGamepads(Gamepad gamepad1, Gamepad gamepad2) {
         if (!running.get()) return false;
         if (gamepad1 == null || gamepad2 == null) throw new IllegalArgumentException("gamepads must not be null");
         return enqueue(new GamepadFrame(SystemClock.elapsedRealtimeNanos(), gamepad1, gamepad2));
     }
+
+    /** Queue a control/debug envelope for the TCP writer. The common envelope header is added here. */
+    public boolean publishMessage(Envelope.Builder message) {
+        if (message == null || message.getBodyCase() == Envelope.BodyCase.BODY_NOT_SET) return false;
+        return enqueue(new Message(SystemClock.elapsedRealtimeNanos(), message.build()));
+    }
+
+    /** Returns the next robot-originated message with its robot-local receipt time. */
+    public IncomingMessage pollIncomingMessage() { return incoming.poll(); }
 
     public boolean isConnected() { return connected.get(); }
     public int getQueuedPacketCount() { return frames.size(); }
@@ -127,7 +241,7 @@ public final class StructuredRobotDataClient implements Closeable {
 
     @Override public synchronized void close() {
         if (!running.getAndSet(false)) return;
-        connected.set(false); closeSocket(socket); if (worker != null) worker.interrupt(); frames.clear();
+        connected.set(false); closeSocket(socket); if (worker != null) worker.interrupt(); frames.clear(); incoming.clear();
     }
 
     private boolean enqueue(Outbound frame) {
@@ -157,27 +271,50 @@ public final class StructuredRobotDataClient implements Closeable {
         active.setSoTimeout(1500); validateHelloAck(readFrame(input), connection.id); active.setSoTimeout(0);
         send(output, connection, SystemClock.elapsedRealtimeNanos(), value -> value.setSchema(schema())); output.flush();
         connected.set(true); lastError = null;
+        Thread reader = new Thread(() -> readIncoming(active, input), "StructuredRobotDataClient-reader");
+        reader.setDaemon(true);
+        reader.start();
         long lastHeartbeat = SystemClock.elapsedRealtimeNanos();
-        while (running.get() && !active.isClosed()) {
-            Outbound first;
-            try { first = frames.pollFirst(250, TimeUnit.MILLISECONDS); }
-            catch (InterruptedException ignored) { Thread.currentThread().interrupt(); return; }
-            if (first instanceof Sample) {
-                List<Sample> batch = new ArrayList<>(); batch.add((Sample) first);
-                long deadline = SystemClock.elapsedRealtime() + BATCH_WINDOW_MS;
-                while (batch.size() < MAX_BATCH && SystemClock.elapsedRealtime() < deadline) {
-                    Outbound next = frames.pollFirst();
-                    if (!(next instanceof Sample)) { if (next != null) frames.offerFirst(next); break; }
-                    batch.add((Sample) next);
+        try {
+            while (running.get() && !active.isClosed()) {
+                Outbound first;
+                try { first = frames.pollFirst(250, TimeUnit.MILLISECONDS); }
+                catch (InterruptedException ignored) { Thread.currentThread().interrupt(); return; }
+                if (first instanceof Sample) {
+                    List<Sample> batch = new ArrayList<>(); batch.add((Sample) first);
+                    long deadline = SystemClock.elapsedRealtime() + BATCH_WINDOW_MS;
+                    while (batch.size() < MAX_BATCH && SystemClock.elapsedRealtime() < deadline) {
+                        Outbound next = frames.pollFirst();
+                        if (!(next instanceof Sample)) { if (next != null) frames.offerFirst(next); break; }
+                        batch.add((Sample) next);
+                    }
+                    send(output, connection, batch.get(batch.size() - 1).robotTimeNs, value -> value.setSampleBatch(sampleBatch(batch))); output.flush();
+                } else if (first != null) { send(output, connection, first.robotTimeNs(), first::apply); output.flush(); }
+                long now = SystemClock.elapsedRealtimeNanos();
+                if (now - lastHeartbeat >= HEARTBEAT_INTERVAL_NS) {
+                    Heartbeat.Builder heartbeat = Heartbeat.newBuilder().setQueuedFrames(frames.size()).setDroppedSamples(droppedSamples.get());
+                    long last = nextSample.get() - 1; if (last >= 0) heartbeat.setLastSampleSequence(last);
+                    send(output, connection, now, value -> value.setHeartbeat(heartbeat)); output.flush(); lastHeartbeat = now;
                 }
-                send(output, connection, batch.get(batch.size() - 1).robotTimeNs, value -> value.setSampleBatch(sampleBatch(batch))); output.flush();
-            } else if (first != null) { send(output, connection, first.robotTimeNs(), first::apply); output.flush(); }
-            long now = SystemClock.elapsedRealtimeNanos();
-            if (now - lastHeartbeat >= HEARTBEAT_INTERVAL_NS) {
-                Heartbeat.Builder heartbeat = Heartbeat.newBuilder().setQueuedFrames(frames.size()).setDroppedSamples(droppedSamples.get());
-                long last = nextSample.get() - 1; if (last >= 0) heartbeat.setLastSampleSequence(last);
-                send(output, connection, now, value -> value.setHeartbeat(heartbeat)); output.flush(); lastHeartbeat = now;
             }
+        } finally {
+            reader.interrupt();
+        }
+    }
+
+    private void readIncoming(Socket active, DataInputStream input) {
+        try {
+            while (running.get() && !active.isClosed()) {
+                Envelope message = readFrame(input);
+                if (message.getBodyCase() == Envelope.BodyCase.HELLO_ACK) continue;
+                IncomingMessage queued = new IncomingMessage(message, SystemClock.elapsedRealtimeNanos());
+                if (!incoming.offerLast(queued)) incoming.pollFirst();
+            }
+        } catch (IOException ignored) {
+            // The writer observes the closed socket and reconnects. A TCP loss
+            // must never block the OpMode loop.
+        } finally {
+            closeSocket(active);
         }
     }
 
@@ -185,7 +322,17 @@ public final class StructuredRobotDataClient implements Closeable {
         UUID requestId = UUID.randomUUID(); byte[] request = discoveryRequest(requestId);
         try (DatagramSocket udp = new DatagramSocket()) {
             udp.setBroadcast(true); udp.setSoTimeout(1000);
-            for (InetAddress broadcast : broadcastAddresses()) udp.send(new DatagramPacket(request, request.length, broadcast, discoveryPort));
+            // A robot can have multiple active interfaces, including virtual or
+            // point-to-point interfaces with no usable route for broadcast.
+            // One failed send must not prevent discovery on the robot/laptop
+            // Wi-Fi network.
+            for (InetAddress broadcast : broadcastAddresses()) {
+                try {
+                    udp.send(new DatagramPacket(request, request.length, broadcast, discoveryPort));
+                } catch (IOException ignored) {
+                    // Continue probing the remaining interface broadcasts.
+                }
+            }
             byte[] bytes = new byte[DISCOVERY_RESPONSE_BYTES]; DatagramPacket response = new DatagramPacket(bytes, bytes.length);
             while (running.get()) { udp.receive(response); int port = discoveryResponsePort(response.getData(), response.getOffset(), response.getLength(), requestId); if (port > 0) return new InetSocketAddress(response.getAddress(), port); }
         }
@@ -209,7 +356,8 @@ public final class StructuredRobotDataClient implements Closeable {
     private Hello hello() {
         return Hello.newBuilder().setRobotId("android-" + Build.MODEL.replace(' ', '-')).setRobotName("FTC Robot Controller")
                 .setOpModeName(opModeName).setStartedAtRobotTimeNs(SystemClock.elapsedRealtimeNanos()).setQueueCapacity(QUEUE_CAPACITY)
-                .addCapabilities("schema").addCapabilities("sample-batches").addCapabilities("events").addCapabilities("gaps").build();
+                .addCapabilities("schema").addCapabilities("sample-batches").addCapabilities("events").addCapabilities("gaps")
+                .addCapabilities("debugger-v1").build();
     }
 
     private Schema schema() {
@@ -231,6 +379,12 @@ public final class StructuredRobotDataClient implements Closeable {
             for (Signal signal : signals) snapshot.addValues(value(signal, sample.values.get(signal.id))); batch.addSnapshots(snapshot);
         }
         return batch.build();
+    }
+
+    private double readVoltage() {
+        if (voltageSensor == null) return 0.0;
+        double voltage = voltageSensor.getVoltage();
+        return Double.isFinite(voltage) && voltage > 0.0 ? voltage : 0.0;
     }
 
     private static ChannelValue value(Signal signal, Object raw) {
@@ -276,11 +430,47 @@ public final class StructuredRobotDataClient implements Closeable {
     }
     private static ByteString uuid(UUID id) { return ByteString.copyFrom(ByteBuffer.allocate(16).order(ByteOrder.BIG_ENDIAN).putLong(id.getMostSignificantBits()).putLong(id.getLeastSignificantBits()).array()); }
 
+    public static final class IncomingMessage {
+        private final Envelope envelope;
+        private final long receivedRobotTimeNs;
+
+        private IncomingMessage(Envelope envelope, long receivedRobotTimeNs) {
+            this.envelope = envelope;
+            this.receivedRobotTimeNs = receivedRobotTimeNs;
+        }
+
+        public Envelope envelope() { return envelope; }
+        public long receivedRobotTimeNs() { return receivedRobotTimeNs; }
+    }
+
     private interface Populator { void apply(Envelope.Builder envelope); }
     private interface Outbound { long robotTimeNs(); void apply(Envelope.Builder envelope); }
     private static final class Sample implements Outbound { final long robotTimeNs, sequence; final Map<String, Object> values; Sample(long robotTimeNs, long sequence, Map<String, Object> values) { this.robotTimeNs = robotTimeNs; this.sequence = sequence; this.values = values; } public long robotTimeNs() { return robotTimeNs; } public void apply(Envelope.Builder ignored) { throw new UnsupportedOperationException("samples are batched"); } }
     private static final class GamepadFrame implements Outbound { final long time; final GamepadSnapshot snapshot; GamepadFrame(long time, Gamepad one, Gamepad two) { this.time = time; snapshot = GamepadSnapshot.newBuilder().setGamepad1(gamepad(one)).setGamepad2(gamepad(two)).build(); } public long robotTimeNs() { return time; } public void apply(Envelope.Builder envelope) { envelope.setGamepad(snapshot); } }
+    private static final class Message implements Outbound { final long time; final Envelope message; Message(long time, Envelope message) { this.time = time; this.message = message; } public long robotTimeNs() { return time; } public void apply(Envelope.Builder envelope) { envelope.mergeFrom(message); } }
     private static org.firstinspires.ftc.teamcode.data.protocol.Gamepad gamepad(Gamepad source) { return org.firstinspires.ftc.teamcode.data.protocol.Gamepad.newBuilder().setLeftStickX(source.left_stick_x).setLeftStickY(source.left_stick_y).setRightStickX(source.right_stick_x).setRightStickY(source.right_stick_y).setLeftTrigger(source.left_trigger).setRightTrigger(source.right_trigger).setA(source.a).setB(source.b).setX(source.x).setY(source.y).setDpadUp(source.dpad_up).setDpadDown(source.dpad_down).setDpadLeft(source.dpad_left).setDpadRight(source.dpad_right).setLeftBumper(source.left_bumper).setRightBumper(source.right_bumper).setLeftStickButton(source.left_stick_button).setRightStickButton(source.right_stick_button).setBack(source.back).setStart(source.start).setGuide(source.guide).build(); }
+    private static final class MotorBinding {
+        final String deviceId;
+        final DcMotorEx motor;
+        final DoubleSupplier commandedPower;
+
+        MotorBinding(String deviceId, DcMotorEx motor, DoubleSupplier commandedPower) {
+            this.deviceId = text(deviceId);
+            this.motor = motor;
+            this.commandedPower = commandedPower;
+        }
+
+        void addValues(Map<String, Object> values, double robotVoltage) {
+            double appliedPower = motor.getPower();
+            double currentAmps = motor.getCurrent(CurrentUnit.AMPS);
+            values.put(deviceId + ".commandedPower", commandedPower.getAsDouble());
+            values.put(deviceId + ".appliedPower", appliedPower);
+            values.put(deviceId + ".encoderPosition", (long) motor.getCurrentPosition());
+            values.put(deviceId + ".velocityTicksPerSecond", motor.getVelocity());
+            values.put(deviceId + ".currentAmps", currentAmps);
+            values.put(deviceId + ".electricalPowerWatts", currentAmps * robotVoltage);
+        }
+    }
     private static final class Device { final String id, label, subsystem, deviceType; Device(String id, String label, String subsystem, String deviceType) { this.id = text(id); this.label = text(label); this.subsystem = text(subsystem); this.deviceType = text(deviceType); } }
     private static final class Signal { final String id, label, deviceId, quantity, unit; final ValueType valueType; final ChannelRole role; final double sampleHintHz; int channelId; Signal(String id, String label, String deviceId, String quantity, String unit, String type, String role, double sampleHintHz) { this.id = text(id); this.label = text(label); this.deviceId = deviceId; this.quantity = text(quantity); this.unit = text(unit); this.valueType = ValueType.valueOf(text(type).toUpperCase()); this.role = ChannelRole.valueOf(text(role).toUpperCase()); this.sampleHintHz = sampleHintHz; } }
     private static final class Connection { final UUID id; long nextSequence; Connection(UUID id) { this.id = id; } }

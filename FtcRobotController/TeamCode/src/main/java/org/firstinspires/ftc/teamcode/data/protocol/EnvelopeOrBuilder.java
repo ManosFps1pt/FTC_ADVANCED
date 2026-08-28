@@ -156,5 +156,115 @@ public interface EnvelopeOrBuilder extends
    */
   org.firstinspires.ftc.teamcode.data.protocol.ProtocolError getError();
 
+  /**
+   * <code>.ftc.robotdata.v2.DebugManifest debug_manifest = 20;</code>
+   * @return Whether the debugManifest field is set.
+   */
+  boolean hasDebugManifest();
+  /**
+   * <code>.ftc.robotdata.v2.DebugManifest debug_manifest = 20;</code>
+   * @return The debugManifest.
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugManifest getDebugManifest();
+
+  /**
+   * <code>.ftc.robotdata.v2.DebugSelectRequest debug_select_request = 21;</code>
+   * @return Whether the debugSelectRequest field is set.
+   */
+  boolean hasDebugSelectRequest();
+  /**
+   * <code>.ftc.robotdata.v2.DebugSelectRequest debug_select_request = 21;</code>
+   * @return The debugSelectRequest.
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugSelectRequest getDebugSelectRequest();
+
+  /**
+   * <code>.ftc.robotdata.v2.DebugSelectResponse debug_select_response = 22;</code>
+   * @return Whether the debugSelectResponse field is set.
+   */
+  boolean hasDebugSelectResponse();
+  /**
+   * <code>.ftc.robotdata.v2.DebugSelectResponse debug_select_response = 22;</code>
+   * @return The debugSelectResponse.
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugSelectResponse getDebugSelectResponse();
+
+  /**
+   * <code>.ftc.robotdata.v2.DebugToolReady debug_tool_ready = 23;</code>
+   * @return Whether the debugToolReady field is set.
+   */
+  boolean hasDebugToolReady();
+  /**
+   * <code>.ftc.robotdata.v2.DebugToolReady debug_tool_ready = 23;</code>
+   * @return The debugToolReady.
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady getDebugToolReady();
+
+  /**
+   * <code>.ftc.robotdata.v2.DebugToolState debug_tool_state = 24;</code>
+   * @return Whether the debugToolState field is set.
+   */
+  boolean hasDebugToolState();
+  /**
+   * <code>.ftc.robotdata.v2.DebugToolState debug_tool_state = 24;</code>
+   * @return The debugToolState.
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugToolState getDebugToolState();
+
+  /**
+   * <code>.ftc.robotdata.v2.DebugParameterSetRequest debug_parameter_set_request = 25;</code>
+   * @return Whether the debugParameterSetRequest field is set.
+   */
+  boolean hasDebugParameterSetRequest();
+  /**
+   * <code>.ftc.robotdata.v2.DebugParameterSetRequest debug_parameter_set_request = 25;</code>
+   * @return The debugParameterSetRequest.
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetRequest getDebugParameterSetRequest();
+
+  /**
+   * <code>.ftc.robotdata.v2.DebugParameterSetResponse debug_parameter_set_response = 26;</code>
+   * @return Whether the debugParameterSetResponse field is set.
+   */
+  boolean hasDebugParameterSetResponse();
+  /**
+   * <code>.ftc.robotdata.v2.DebugParameterSetResponse debug_parameter_set_response = 26;</code>
+   * @return The debugParameterSetResponse.
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetResponse getDebugParameterSetResponse();
+
+  /**
+   * <code>.ftc.robotdata.v2.DebugCommandRequest debug_command_request = 27;</code>
+   * @return Whether the debugCommandRequest field is set.
+   */
+  boolean hasDebugCommandRequest();
+  /**
+   * <code>.ftc.robotdata.v2.DebugCommandRequest debug_command_request = 27;</code>
+   * @return The debugCommandRequest.
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest getDebugCommandRequest();
+
+  /**
+   * <code>.ftc.robotdata.v2.DebugCommandResponse debug_command_response = 28;</code>
+   * @return Whether the debugCommandResponse field is set.
+   */
+  boolean hasDebugCommandResponse();
+  /**
+   * <code>.ftc.robotdata.v2.DebugCommandResponse debug_command_response = 28;</code>
+   * @return The debugCommandResponse.
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse getDebugCommandResponse();
+
+  /**
+   * <code>.ftc.robotdata.v2.DebugSafetyState debug_safety_state = 29;</code>
+   * @return Whether the debugSafetyState field is set.
+   */
+  boolean hasDebugSafetyState();
+  /**
+   * <code>.ftc.robotdata.v2.DebugSafetyState debug_safety_state = 29;</code>
+   * @return The debugSafetyState.
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState getDebugSafetyState();
+
   public org.firstinspires.ftc.teamcode.data.protocol.Envelope.BodyCase getBodyCase();
 }

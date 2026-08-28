@@ -227,6 +227,21 @@ class Command:
     sequence: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class OpModeException:
+    """An uncaught user-code exception sent by the Robot Controller.
+
+    The FTC SDK sends this as a ``CMD_SHOW_STACKTRACE`` Robocol command to
+    the Driver Station.  It is deliberately separate from telemetry: it is a
+    one-shot diagnostic event and the SDK only sends the first 15 stack-trace
+    lines to the peer.
+    """
+
+    stacktrace: str
+    timestamp_ns: int
+    sequence: int | None
+
+
 @dataclass(slots=True)
 class _PendingCommand:
     """Internal retry state for one outbound reliable command."""
@@ -378,6 +393,7 @@ class TelemetryTerminal:
 
 
 PacketListener = Callable[[Packet], None]
+OpModeExceptionListener = Callable[[OpModeException], None]
 
 
 class AdbUsbClient:
@@ -520,6 +536,8 @@ class ControlHubClient:
     _GAMEPAD_INTERVAL_S: Final = 0.04
     _GAMEPAD_IDLE_GRACE_S: Final = 1.0
     _STOP_OPMODE_NAME: Final = "$Stop$Robot$"
+    # Sent by OpModeManagerImpl.handleSendStacktrace() when user code throws.
+    _CMD_SHOW_STACKTRACE: Final = "CMD_SHOW_STACKTRACE"
 
     def __init__(self, config: ControlHubConfig) -> None:
         self.config = config
@@ -531,6 +549,7 @@ class ControlHubClient:
         self._version_error: ProtocolVersionMismatch | None = None
         self._lock = threading.RLock()
         self._listeners: list[PacketListener] = []
+        self._opmode_exception_listeners: list[OpModeExceptionListener] = []
         self._sequence = 0
         self._last_heartbeat_ns: int | None = None
         self._robot_state = RobotState.UNKNOWN
@@ -579,6 +598,16 @@ class ControlHubClient:
         """Subscribe to all validated incoming packets."""
         with self._lock:
             self._listeners.append(listener)
+
+    def add_opmode_exception_listener(self, listener: OpModeExceptionListener) -> None:
+        """Subscribe to uncaught OpMode exceptions received over Robocol.
+
+        The callback runs on the Robocol I/O thread, after the incoming command
+        has been acknowledged to the Robot Controller. Keep it short; queue
+        expensive work elsewhere.
+        """
+        with self._lock:
+            self._opmode_exception_listeners.append(listener)
 
     def set_gamepad_input(self, gamepad: GamepadInput) -> None:
         """Assign the normalized state for a driver slot.
@@ -983,7 +1012,11 @@ class ControlHubClient:
         # The RC expects command requests to be acknowledged immediately,
         # before their (possibly slow) notification handlers run.
         self._send(self._encode_command(command, acknowledged=True, sequence=packet.sequence))
-        if command.name == "CMD_NOTIFY_OP_MODE_LIST":
+        if command.name == self._CMD_SHOW_STACKTRACE:
+            exception = decode_opmode_exception(command)
+            if exception is not None:
+                self._notify_opmode_exception_listeners(exception)
+        elif command.name == "CMD_NOTIFY_OP_MODE_LIST":
             self._handle_opmode_list(command.extra)
         elif command.name == "CMD_REQUEST_CONFIGURATIONS_RESP":
             self._handle_configuration_list(command.extra)
@@ -1072,6 +1105,15 @@ class ControlHubClient:
                 listener(packet)
             except Exception:  # A UI callback must not kill the safety heartbeat.
                 LOG.exception("Robocol packet listener failed")
+
+    def _notify_opmode_exception_listeners(self, exception: OpModeException) -> None:
+        with self._lock:
+            listeners = tuple(self._opmode_exception_listeners)
+        for listener in listeners:
+            try:
+                listener(exception)
+            except Exception:  # Diagnostics must never interrupt the heartbeat.
+                LOG.exception("OpMode exception listener failed")
 
     def _next_sequence(self) -> int:
         with self._lock:
@@ -1202,6 +1244,33 @@ class ControlHubClient:
             )
             return None
         return Packet(message_type, sequence, data[_NORMAL_HEADER.size :], received_ns)
+
+
+def decode_opmode_exception(command: Command) -> OpModeException | None:
+    """Decode the FTC SDK's one-shot uncaught-OpMode-exception command.
+
+    ``OpModeManagerImpl.handleSendStacktrace()`` serializes the exception with
+    Android's ``Log.getStackTraceString()`` and sends it as UTF-8 in the
+    ``CMD_SHOW_STACKTRACE`` command's extra field. The normal command decoder
+    intentionally leaves all extras as bytes, so this narrow decoder keeps
+    malformed diagnostics from destabilizing the control connection.
+    """
+
+    if command.name != ControlHubClient._CMD_SHOW_STACKTRACE:
+        return None
+    try:
+        stacktrace = command.extra.decode("utf-8")
+    except UnicodeDecodeError:
+        LOG.warning("Ignoring CMD_SHOW_STACKTRACE with non-UTF-8 text")
+        return None
+    if not stacktrace.strip():
+        LOG.warning("Ignoring empty CMD_SHOW_STACKTRACE")
+        return None
+    return OpModeException(
+        stacktrace=stacktrace,
+        timestamp_ns=command.timestamp_ns,
+        sequence=command.sequence,
+    )
 
 
 def decode_telemetry(packet: Packet) -> TelemetryPacket | None:

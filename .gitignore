@@ -1,5 +1,6 @@
 # Gradle files
 .gradle/
+.gradle-codex/
 build/
 
 # Local configuration file (sdk path, etc)
@@ -7,6 +8,11 @@ local.properties
 
 # Log/OS Files
 *.log
+
+# Generated local caches
+__pycache__/
+*.py[cod]
+*.tsbuildinfo
 
 # Android Studio generated files and folders
 captures/
@@ -35,9 +41,24 @@ google-services.json
 
 # Local web Driver Station development artifacts
 .venv-web/
+.venv/
+mcp_server/.venv/
+mcp_server/tunnel-client/*.exe
+mcp_server/tunnel-client/*.zip
 .pnpm-store/
 web_driver_station/frontend/node_modules/
 web_driver_station/frontend/dist/
+web_driver_station/recordings/
+web_driver_station/recording_upload.local.json
+# Local private SSH key
+ssh-key-2026-08-20 (1).key
+# Large local recording video
+web_driver_station/recordings/740a2527-62f6-4a85-8148-3f157b8a6af0/video/20260518_200311.mp4
+recording_viewer/frontend/node_modules/
+recording_viewer/frontend/dist/
+recording_viewer/frontend/*.tsbuildinfo
+recording_viewer/frontend/vite.config.js
+recording_viewer/frontend/vite.config.d.ts
 
 # Large local 3D model export
 3d model/MAJOR ROBOT ASSEMBLY.obj

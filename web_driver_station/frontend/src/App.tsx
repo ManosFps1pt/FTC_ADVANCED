@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RobotConfiguration } from "./RobotConfiguration";
 import { TelemetryDashboard } from "./TelemetryDashboard";
+import { MotorLab } from "./MotorLab";
 
 type Status = {
   connected: boolean;
@@ -8,6 +9,7 @@ type Status = {
   robot_state: string;
   started_opmode: boolean;
   telemetry: Telemetry | null;
+  driver_station_error: string | null;
 };
 
 type PingResult = { latency_ms: number | null };
@@ -17,6 +19,9 @@ type RobotDataStatus = {
   connected: boolean;
   connection_count: number;
   peers: { host: string; port: number }[];
+  recording: {
+    uploads: Record<string, { state: string; detail?: string; uploadedFiles?: number; skippedFiles?: number }>;
+  };
 };
 
 type Telemetry = {
@@ -141,6 +146,7 @@ function sameStatus(left: Status, right: Status): boolean {
     && left.host === right.host
     && left.robot_state === right.robot_state
     && left.started_opmode === right.started_opmode
+    && left.driver_station_error === right.driver_station_error
     && sameTelemetry(left.telemetry, right.telemetry);
 }
 
@@ -219,7 +225,39 @@ function Axis({
   );
 }
 
-function DriverStationPage({ page }: { page: "driver" | "configuration" | "telemetry" }) {
+function RecordingDecisionModal({
+  sessionId,
+  uploadState,
+  busy,
+  onUpload,
+  onDelete,
+}: {
+  sessionId: string;
+  uploadState: { state: string; detail?: string };
+  busy: boolean;
+  onUpload: (keepLocal?: boolean) => void;
+  onDelete: () => void;
+}) {
+  const failed = uploadState.state === "error";
+  return (
+    <div className="recording-modal-backdrop" role="presentation">
+      <section className="recording-modal panel" role="dialog" aria-modal="true" aria-labelledby="recording-modal-title">
+        <p className="eyebrow">Recording ready</p>
+        <h2 id="recording-modal-title">{failed ? "Upload failed" : "What should we do with this recording?"}</h2>
+        <p>{failed ? uploadState.detail : "The OpMode ended and the backend finalized a recording. Uploading will keep the server copy and remove the laptop copy by default."}</p>
+        <code className="recording-session-id">{sessionId}</code>
+        {failed && <p className="recording-modal-error">The local recording is still available. You can retry the upload or discard both copies.</p>}
+        <div className="recording-modal-actions">
+          <button className="primary" type="button" disabled={busy} onClick={() => onUpload(false)}>{failed ? "Retry · remove laptop copy" : "Upload · remove laptop copy"}</button>
+          <button className="secondary" type="button" disabled={busy} onClick={() => onUpload(true)}>{failed ? "Retry · keep laptop copy" : "Upload · keep laptop copy"}</button>
+          <button className="danger" type="button" disabled={busy} onClick={onDelete}>Discard both copies</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DriverStationPage({ page }: { page: "driver" | "configuration" | "telemetry" | "debug" }) {
   const [host, setHost] = useState("192.168.43.1");
   const [status, setStatus] = useState<Status>({
     connected: false,
@@ -227,6 +265,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     robot_state: "UNKNOWN",
     started_opmode: false,
     telemetry: null,
+    driver_station_error: null,
   });
   const [opmodes, setOpmodes] = useState<Record<string, unknown>[]>([]);
   const [opmode, setOpmode] = useState("");
@@ -236,12 +275,14 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
   const [assignments, setAssignments] = useState<DriverAssignments>({ 1: null, 2: null });
   const [notice, setNotice] = useState("Connect to a controlled test Robot Controller.");
   const [busy, setBusy] = useState(false);
+  const [recordingBusy, setRecordingBusy] = useState(false);
   const [pingMs, setPingMs] = useState<number | null>(null);
   const [robotData, setRobotData] = useState<RobotDataStatus>({
     listening: false,
     connected: false,
     connection_count: 0,
     peers: [],
+    recording: { uploads: {} },
   });
   const assignmentsRef = useRef<DriverAssignments>({ 1: null, 2: null });
   const shortcutKeysRef = useRef<Set<string>>(new Set());
@@ -249,6 +290,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
 
   const connected = status.connected;
   const physicalMode = physicalControllers.length > 0;
+  const pendingRecording = Object.entries(robotData.recording?.uploads ?? {}).find(([, upload]) => upload.state === "pending_confirmation" || upload.state === "error");
 
   const updateAssignments = useCallback((next: DriverAssignments) => {
     assignmentsRef.current = next;
@@ -493,6 +535,24 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     }
   };
 
+  const recordingAction = async (action: "upload" | "delete", keepLocal = false) => {
+    if (!pendingRecording) return;
+    const [sessionId] = pendingRecording;
+    if (action === "delete" && !window.confirm("Delete this finalized recording from the laptop? This cannot be undone.")) return;
+    setRecordingBusy(true);
+    try {
+      await api(`/data/recordings/${encodeURIComponent(sessionId)}${action === "upload" ? "/upload" : ""}`, {
+        method: action === "upload" ? "POST" : "DELETE",
+        ...(action === "upload" ? { body: JSON.stringify({ keep_local: keepLocal }) } : {}),
+      });
+      setNotice(action === "upload" ? (keepLocal ? "Recording upload started; laptop copy will be kept." : "Recording upload started; laptop copy will be removed after success.") : "Recording discarded from the laptop and server.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Recording action failed");
+    } finally {
+      setRecordingBusy(false);
+    }
+  };
+
   const connect = () =>
     runAction(async () => {
       const nextStatus = await api<Status>("/connect", {
@@ -571,6 +631,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
       ...status.telemetry.numbers.map(([key, value]) => [key, value.toFixed(3)] as const),
     ].sort(([left], [right]) => left.localeCompare(right));
   }, [status.telemetry]);
+  const opmodeError = status.driver_station_error;
 
   const controllerName = (controllerIndex: number | null) => {
     if (controllerIndex === null) return null;
@@ -585,7 +646,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
         {([1, 2] as const).map((driver) => { const assigned = controllerName(assignments[driver]); return <span className={assigned ? "active" : ""} key={driver}><i className="driver-dot" />D{driver}: {assigned ? "Ready" : physicalMode ? "Unassigned" : user === driver ? "Virtual" : "Available"}</span>; })}
       </div>
       <div className={`topbar-tcp ${robotData.connected ? "active" : ""}`}><i className="driver-dot" />TCP {robotData.connected ? "Connected" : robotData.listening ? "Listening" : "Offline"}</div>
-      <a className={`topbar-link ${page === "configuration" ? "current" : ""}`} href="#/configure">Configure Robot</a><a className="topbar-link" href={page === "telemetry" ? "#/" : "#/telemetry"}>{page === "telemetry" ? "Driver Station" : "Telemetry Lab"}</a>
+      <a className={`topbar-link ${page === "configuration" ? "current" : ""}`} href="#/configure">Configure Robot</a><a className={`topbar-link ${page === "debug" ? "current" : ""}`} href="#/debugger">Debugger</a><a className="topbar-link" href={page === "telemetry" ? "#/" : "#/telemetry"}>{page === "telemetry" ? "Driver Station" : "Telemetry Lab"}</a>
     </div>
   </header>;
 
@@ -674,9 +735,15 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
         </section>
         }
 
-        <aside className={`telemetry panel ${physicalMode ? "telemetry-wide" : ""}`}>
-          <div className="panel-heading"><div><p className="eyebrow">Live stream</p><h2>Telemetry</h2></div><span>{status.telemetry?.state ?? "WAITING"}</span></div>
-          {status.telemetry ? (
+        <aside className={`telemetry panel ${physicalMode ? "telemetry-wide" : ""} ${opmodeError ? "telemetry-opmode-error" : ""}`} aria-live="polite">
+          <div className="panel-heading"><div><p className="eyebrow">{opmodeError ? "Robot Controller diagnostic" : "Live stream"}</p><h2>{opmodeError ? "OpMode Error" : "Telemetry"}</h2></div><span>{opmodeError ? "EXCEPTION" : status.telemetry?.state ?? "WAITING"}</span></div>
+          {opmodeError ? (
+            <div className="opmode-error-body">
+              <p className="opmode-error-summary">OpMode threw an uncaught exception.</p>
+              <p className="opmode-error-hint">The stack trace below came from the Robot Controller. Click <strong>Stop</strong> to dismiss it and return to telemetry.</p>
+              <pre className="opmode-error-stack">{opmodeError}</pre>
+            </div>
+          ) : status.telemetry ? (
             <>
               <p className="telemetry-tag">{status.telemetry.tag}</p>
               <dl>
@@ -693,18 +760,27 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
       <RobotConfiguration connected={connected} robotState={status.robot_state} startedOpmode={status.started_opmode} />
     </main>}
     {page === "telemetry" && <TelemetryDashboard topbar={topbar} />}
+    {page === "debug" && <MotorLab />}
+    {pendingRecording && <RecordingDecisionModal
+      sessionId={pendingRecording[0]}
+      uploadState={pendingRecording[1]}
+      busy={recordingBusy}
+      onUpload={(keepLocal = false) => void recordingAction("upload", keepLocal)}
+      onDelete={() => void recordingAction("delete")}
+    />}
     </>
   );
 }
 
 function App() {
-  const [page, setPage] = useState<"driver" | "configuration" | "telemetry">(() => {
+  const [page, setPage] = useState<"driver" | "configuration" | "telemetry" | "debug">(() => {
     if (window.location.hash === "#/telemetry") return "telemetry";
+    if (window.location.hash === "#/debugger") return "debug";
     return window.location.hash === "#/configure" ? "configuration" : "driver";
   });
 
   useEffect(() => {
-    const updatePage = () => setPage(window.location.hash === "#/telemetry" ? "telemetry" : window.location.hash === "#/configure" ? "configuration" : "driver");
+    const updatePage = () => setPage(window.location.hash === "#/telemetry" ? "telemetry" : window.location.hash === "#/configure" ? "configuration" : window.location.hash === "#/debugger" ? "debug" : "driver");
     window.addEventListener("hashchange", updatePage);
     return () => window.removeEventListener("hashchange", updatePage);
   }, []);

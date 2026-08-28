@@ -1,13 +1,31 @@
 package org.firstinspires.ftc.teamcode;
 
+import android.app.Activity;
+import android.graphics.Color;
+import android.os.SystemClock;
+import android.view.View;
+
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.data.StructuredRobotDataClient;
+import org.firstinspires.ftc.teamcode.data.protocol.DebugCommand;
+import org.firstinspires.ftc.teamcode.data.protocol.DebugCommandArgumentDefinition;
+import org.firstinspires.ftc.teamcode.data.protocol.DebugCommandArgumentValue;
+import org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest;
+import org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse;
+import org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResult;
+import org.firstinspires.ftc.teamcode.data.protocol.DebugManifest;
+import org.firstinspires.ftc.teamcode.data.protocol.DebugNode;
+import org.firstinspires.ftc.teamcode.data.protocol.DebugNodeKind;
+import org.firstinspires.ftc.teamcode.data.protocol.DebugRiskClass;
+import org.firstinspires.ftc.teamcode.data.protocol.DebugSessionState;
+import org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady;
+import org.firstinspires.ftc.teamcode.data.protocol.Envelope;
+import org.firstinspires.ftc.teamcode.data.protocol.ValueType;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.UUID;
 
 /**
  * A safe Robot Controller/Driver Station telemetry check with no hardware dependencies.
@@ -18,19 +36,34 @@ import java.util.Map;
  */
 @TeleOp(name = "Telemetry Gamepad Test", group = "Testing")
 public class TelemetryGamepadTest extends OpMode {
+    private static final int MANIFEST_REVISION = 1;
+    private static final String NODE_ID = "telemetry.gamepad";
+    private static final String COMMAND_SET_ALLIANCE = "alliance.set";
+    private static final String ARGUMENT_IS_RED = "isRed";
     private static final int DATA_SERVER_PORT = StructuredRobotDataClient.DEFAULT_PORT;
     private static final int DATA_DISCOVERY_PORT = StructuredRobotDataClient.DEFAULT_DISCOVERY_PORT;
     private final ElapsedTime runtime = new ElapsedTime();
     private StructuredRobotDataClient dataClient;
+    private View relativeLayout;
+    private String toolInstanceId;
+    private boolean allianceIsRed;
 
     @Override
     public void init() {
+        toolInstanceId = UUID.randomUUID().toString();
+        int relativeLayoutId = hardwareMap.appContext.getResources().getIdentifier(
+                "RelativeLayout", "id", hardwareMap.appContext.getPackageName());
+        relativeLayout = ((Activity) hardwareMap.appContext).findViewById(relativeLayoutId);
+        setAlliance(false);
+
         dataClient = new StructuredRobotDataClient(
                 DATA_DISCOVERY_PORT,
                 DATA_SERVER_PORT,
-                "Telemetry Gamepad Test");
-        configureTelemetryCatalog(dataClient);
+                "Telemetry Gamepad Test")
+                .addRuntime(runtime)
+                .addGamepads(gamepad1, gamepad2);
         dataClient.start();
+        publishCommandCatalog();
 
         telemetry.setMsTransmissionInterval(50);
         telemetry.addLine("No-hardware telemetry test");
@@ -47,8 +80,8 @@ public class TelemetryGamepadTest extends OpMode {
 
     @Override
     public void loop() {
-        double runtimeSeconds = runtime.seconds();
-        telemetry.addData("runtime (s)", "%.1f", runtimeSeconds);
+        processIncomingMessages();
+        telemetry.addData("runtime (s)", "%.1f", runtime.seconds());
         telemetry.addData("gamepad1 sticks", "LX %.2f  LY %.2f  RX %.2f  RY %.2f",
                 gamepad1.left_stick_x,
                 gamepad1.left_stick_y,
@@ -83,9 +116,8 @@ public class TelemetryGamepadTest extends OpMode {
             telemetry.addData("Data TCP error", dataClient.getLastError());
         }
 
-        // Call once per FTC loop. The standard client automatically includes
-        // opmode.loopTimeMs in every TCP snapshot and publishes both gamepads.
-        dataClient.publishLoop(createDataSnapshot(runtimeSeconds), gamepad1, gamepad2);
+        // Call once per FTC loop. The bound client captures runtime and both gamepads.
+        dataClient.publishLoop();
         telemetry.update();
 
         // Keep this diagnostic OpMode at a human-scale cadence so its graphs
@@ -99,57 +131,121 @@ public class TelemetryGamepadTest extends OpMode {
 
     @Override
     public void stop() {
+        if (relativeLayout != null) {
+            relativeLayout.post(() -> relativeLayout.setBackgroundColor(Color.WHITE));
+        }
         if (dataClient != null) {
             dataClient.close();
             dataClient = null;
         }
     }
 
-    private Map<String, Object> createDataSnapshot(double runtimeSeconds) {
-        Map<String, Object> values = new LinkedHashMap<>();
-        values.put("opmode.runtimeSeconds", runtimeSeconds);
-        values.put("input.gamepad1.leftStickX", gamepad1.left_stick_x);
-        values.put("input.gamepad1.leftStickY", gamepad1.left_stick_y);
-        values.put("input.gamepad1.rightStickX", gamepad1.right_stick_x);
-        values.put("input.gamepad1.rightStickY", gamepad1.right_stick_y);
-        values.put("input.gamepad1.leftTrigger", gamepad1.left_trigger);
-        values.put("input.gamepad1.rightTrigger", gamepad1.right_trigger);
-        values.put("input.gamepad1.buttonA", gamepad1.a);
-        values.put("input.gamepad1.buttonB", gamepad1.b);
-        values.put("input.gamepad1.buttonX", gamepad1.x);
-        values.put("input.gamepad1.buttonY", gamepad1.y);
-        values.put("input.gamepad2.leftStickX", gamepad2.left_stick_x);
-        values.put("input.gamepad2.leftStickY", gamepad2.left_stick_y);
-        values.put("input.gamepad2.rightStickX", gamepad2.right_stick_x);
-        values.put("input.gamepad2.rightStickY", gamepad2.right_stick_y);
-        values.put("input.gamepad2.buttonA", gamepad2.a);
-        values.put("input.gamepad2.buttonB", gamepad2.b);
-        values.put("input.gamepad2.buttonX", gamepad2.x);
-        values.put("input.gamepad2.buttonY", gamepad2.y);
-        return values;
+    private void publishCommandCatalog() {
+        DebugNode node = DebugNode.newBuilder()
+                .setId(NODE_ID)
+                .setLabel("Telemetry Gamepad Test")
+                .setDescription("Gamepad telemetry with a safe alliance background command")
+                .setKind(DebugNodeKind.DEBUG_TOOL)
+                .setSortOrder(0)
+                .setRiskClass(DebugRiskClass.DEBUG_OBSERVE_ONLY)
+                .setOpModeLabel("Telemetry Gamepad Test")
+                .setSelectable(true)
+                .setEnabled(true)
+                .addCommandIds(COMMAND_SET_ALLIANCE)
+                .build();
+        dataClient.publishMessage(Envelope.newBuilder().setDebugManifest(DebugManifest.newBuilder()
+                .setRevision(MANIFEST_REVISION)
+                .setRegistryId("telemetry-gamepad-test")
+                .setRegistryLabel("Telemetry Gamepad Test")
+                .addNodes(node)));
+
+        DebugCommand setAlliance = DebugCommand.newBuilder()
+                .setId(COMMAND_SET_ALLIANCE)
+                .setLabel("Set Alliance")
+                .setDescription("Set the Control Hub background to red or blue")
+                .setRequiresHumanAcknowledgement(false)
+                .addArguments(DebugCommandArgumentDefinition.newBuilder()
+                        .setId(ARGUMENT_IS_RED)
+                        .setLabel("Red alliance")
+                        .setDescription("True for red alliance, false for blue alliance")
+                        .setValueType(ValueType.BOOLEAN)
+                        .setRequired(true))
+                .build();
+        dataClient.publishMessage(Envelope.newBuilder().setDebugToolReady(DebugToolReady.newBuilder()
+                .setNodeId(NODE_ID)
+                .setToolInstanceId(toolInstanceId)
+                .setManifestRevision(MANIFEST_REVISION)
+                .setState(DebugSessionState.DEBUG_READY)
+                .setMessage("Telemetry command ready")
+                .addCommands(setAlliance)));
     }
 
-    private static void configureTelemetryCatalog(StructuredRobotDataClient client) {
-        client.addDevice("input.gamepad1", "Gamepad 1", "input", "gamepad")
-                .addDevice("input.gamepad2", "Gamepad 2", "input", "gamepad")
-                .addSignal("opmode.runtimeSeconds", "OpMode Runtime", null, "runtime", "s", "float64", "diagnostic", 50)
-                .addSignal("input.gamepad1.leftStickX", "Gamepad 1 Left Stick X", "input.gamepad1", "leftStickX", "percent", "float64", "measured", 50)
-                .addSignal("input.gamepad1.leftStickY", "Gamepad 1 Left Stick Y", "input.gamepad1", "leftStickY", "percent", "float64", "measured", 50)
-                .addSignal("input.gamepad1.rightStickX", "Gamepad 1 Right Stick X", "input.gamepad1", "rightStickX", "percent", "float64", "measured", 50)
-                .addSignal("input.gamepad1.rightStickY", "Gamepad 1 Right Stick Y", "input.gamepad1", "rightStickY", "percent", "float64", "measured", 50)
-                .addSignal("input.gamepad1.leftTrigger", "Gamepad 1 Left Trigger", "input.gamepad1", "leftTrigger", "percent", "float64", "measured", 50)
-                .addSignal("input.gamepad1.rightTrigger", "Gamepad 1 Right Trigger", "input.gamepad1", "rightTrigger", "percent", "float64", "measured", 50)
-                .addSignal("input.gamepad1.buttonA", "Gamepad 1 A", "input.gamepad1", "buttonA", "none", "boolean", "measured", 50)
-                .addSignal("input.gamepad1.buttonB", "Gamepad 1 B", "input.gamepad1", "buttonB", "none", "boolean", "measured", 50)
-                .addSignal("input.gamepad1.buttonX", "Gamepad 1 X", "input.gamepad1", "buttonX", "none", "boolean", "measured", 50)
-                .addSignal("input.gamepad1.buttonY", "Gamepad 1 Y", "input.gamepad1", "buttonY", "none", "boolean", "measured", 50)
-                .addSignal("input.gamepad2.leftStickX", "Gamepad 2 Left Stick X", "input.gamepad2", "leftStickX", "percent", "float64", "measured", 50)
-                .addSignal("input.gamepad2.leftStickY", "Gamepad 2 Left Stick Y", "input.gamepad2", "leftStickY", "percent", "float64", "measured", 50)
-                .addSignal("input.gamepad2.rightStickX", "Gamepad 2 Right Stick X", "input.gamepad2", "rightStickX", "percent", "float64", "measured", 50)
-                .addSignal("input.gamepad2.rightStickY", "Gamepad 2 Right Stick Y", "input.gamepad2", "rightStickY", "percent", "float64", "measured", 50)
-                .addSignal("input.gamepad2.buttonA", "Gamepad 2 A", "input.gamepad2", "buttonA", "none", "boolean", "measured", 50)
-                .addSignal("input.gamepad2.buttonB", "Gamepad 2 B", "input.gamepad2", "buttonB", "none", "boolean", "measured", 50)
-                .addSignal("input.gamepad2.buttonX", "Gamepad 2 X", "input.gamepad2", "buttonX", "none", "boolean", "measured", 50)
-                .addSignal("input.gamepad2.buttonY", "Gamepad 2 Y", "input.gamepad2", "buttonY", "none", "boolean", "measured", 50);
+    private void processIncomingMessages() {
+        if (dataClient == null) return;
+        StructuredRobotDataClient.IncomingMessage incomingMessage;
+        int processed = 0;
+        while (processed++ < 8 && (incomingMessage = dataClient.pollIncomingMessage()) != null) {
+            Envelope message = incomingMessage.envelope();
+            if (message.getBodyCase() == Envelope.BodyCase.DEBUG_COMMAND_REQUEST) {
+                handleCommand(message.getDebugCommandRequest(), incomingMessage.receivedRobotTimeNs());
+            }
+        }
     }
+
+    private void handleCommand(DebugCommandRequest request, long receivedRobotTimeNs) {
+        if (!NODE_ID.equals(request.getNodeId()) || !toolInstanceId.equals(request.getToolInstanceId())) {
+            sendCommandResponse(request, DebugCommandResult.DEBUG_COMMAND_REJECTED,
+                    "TOOL_INSTANCE_MISMATCH", "No matching telemetry tool instance");
+            return;
+        }
+        if (!COMMAND_SET_ALLIANCE.equals(request.getCommandId())) {
+            sendCommandResponse(request, DebugCommandResult.DEBUG_COMMAND_REJECTED,
+                    "UNKNOWN_COMMAND", "Command is not registered by this OpMode");
+            return;
+        }
+        if (request.getTtlMs() == 0 || request.getTtlMs() > 10_000) {
+            sendCommandResponse(request, DebugCommandResult.DEBUG_COMMAND_REJECTED,
+                    "INVALID_TTL", "TTL must be between 1 and 10000 ms");
+            return;
+        }
+        if (SystemClock.elapsedRealtimeNanos() - receivedRobotTimeNs > request.getTtlMs() * 1_000_000L) {
+            sendCommandResponse(request, DebugCommandResult.DEBUG_COMMAND_EXPIRED,
+                    "TTL_EXPIRED", "Command expired before execution");
+            return;
+        }
+        if (request.getArgumentsCount() != 1
+                || !ARGUMENT_IS_RED.equals(request.getArguments(0).getId())
+                || request.getArguments(0).getValueCase()
+                != DebugCommandArgumentValue.ValueCase.BOOLEAN_VALUE) {
+            sendCommandResponse(request, DebugCommandResult.DEBUG_COMMAND_REJECTED,
+                    "INVALID_ARGUMENTS", "alliance.set requires boolean argument isRed");
+            return;
+        }
+
+        setAlliance(request.getArguments(0).getBooleanValue());
+        sendCommandResponse(request, DebugCommandResult.DEBUG_COMMAND_COMPLETED, "",
+                allianceIsRed ? "Alliance set to RED" : "Alliance set to BLUE");
+    }
+
+    private void sendCommandResponse(DebugCommandRequest request, DebugCommandResult result,
+                                     String rejectionCode, String message) {
+        if (dataClient == null) return;
+        dataClient.publishMessage(Envelope.newBuilder().setDebugCommandResponse(
+                DebugCommandResponse.newBuilder()
+                        .setRequestId(request.getRequestId())
+                        .setCommandId(request.getCommandId())
+                        .setResult(result)
+                        .setRejectionCode(rejectionCode)
+                        .setMessage(message)
+                        .setHandledAtRobotTimeNs(SystemClock.elapsedRealtimeNanos())));
+    }
+
+    private void setAlliance(boolean isRed) {
+        allianceIsRed = isRed;
+        if (relativeLayout != null) {
+            int color = isRed ? Color.RED : Color.BLUE;
+            relativeLayout.post(() -> relativeLayout.setBackgroundColor(color));
+        }
+    }
+
 }

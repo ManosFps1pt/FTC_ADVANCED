@@ -1,0 +1,8 @@
+ubuntu@80.225.93.186
+
+.\.venv-web\Scripts\python.exe -m web_driver_station.backend.recording_uploader `
+  .\web_driver_station\recordings\740a2527-62f6-4a85-8148-3f157b8a6af0`
+  --host 80.225.93.186 `
+  --username ubuntu `
+  --private-key '.\ssh-key-2026-08-20 (1).key' `
+  --known-hosts "$env:USERPROFILE\.ssh\known_hosts"

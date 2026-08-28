@@ -34,6 +34,16 @@ public  final class Envelope extends
     SESSION_END(17),
     GAMEPAD(18),
     ERROR(19),
+    DEBUG_MANIFEST(20),
+    DEBUG_SELECT_REQUEST(21),
+    DEBUG_SELECT_RESPONSE(22),
+    DEBUG_TOOL_READY(23),
+    DEBUG_TOOL_STATE(24),
+    DEBUG_PARAMETER_SET_REQUEST(25),
+    DEBUG_PARAMETER_SET_RESPONSE(26),
+    DEBUG_COMMAND_REQUEST(27),
+    DEBUG_COMMAND_RESPONSE(28),
+    DEBUG_SAFETY_STATE(29),
     BODY_NOT_SET(0);
     private final int value;
     private BodyCase(int value) {
@@ -59,6 +69,16 @@ public  final class Envelope extends
         case 17: return SESSION_END;
         case 18: return GAMEPAD;
         case 19: return ERROR;
+        case 20: return DEBUG_MANIFEST;
+        case 21: return DEBUG_SELECT_REQUEST;
+        case 22: return DEBUG_SELECT_RESPONSE;
+        case 23: return DEBUG_TOOL_READY;
+        case 24: return DEBUG_TOOL_STATE;
+        case 25: return DEBUG_PARAMETER_SET_REQUEST;
+        case 26: return DEBUG_PARAMETER_SET_RESPONSE;
+        case 27: return DEBUG_COMMAND_REQUEST;
+        case 28: return DEBUG_COMMAND_RESPONSE;
+        case 29: return DEBUG_SAFETY_STATE;
         case 0: return BODY_NOT_SET;
         default: return null;
       }
@@ -731,6 +751,506 @@ public  final class Envelope extends
    */
   private void clearError() {
     if (bodyCase_ == 19) {
+      bodyCase_ = 0;
+      body_ = null;
+    }
+  }
+
+  public static final int DEBUG_MANIFEST_FIELD_NUMBER = 20;
+  /**
+   * <code>.ftc.robotdata.v2.DebugManifest debug_manifest = 20;</code>
+   */
+  @java.lang.Override
+  public boolean hasDebugManifest() {
+    return bodyCase_ == 20;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugManifest debug_manifest = 20;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugManifest getDebugManifest() {
+    if (bodyCase_ == 20) {
+       return (org.firstinspires.ftc.teamcode.data.protocol.DebugManifest) body_;
+    }
+    return org.firstinspires.ftc.teamcode.data.protocol.DebugManifest.getDefaultInstance();
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugManifest debug_manifest = 20;</code>
+   */
+  private void setDebugManifest(org.firstinspires.ftc.teamcode.data.protocol.DebugManifest value) {
+    value.getClass();
+  body_ = value;
+    bodyCase_ = 20;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugManifest debug_manifest = 20;</code>
+   */
+  private void mergeDebugManifest(org.firstinspires.ftc.teamcode.data.protocol.DebugManifest value) {
+    value.getClass();
+  if (bodyCase_ == 20 &&
+        body_ != org.firstinspires.ftc.teamcode.data.protocol.DebugManifest.getDefaultInstance()) {
+      body_ = org.firstinspires.ftc.teamcode.data.protocol.DebugManifest.newBuilder((org.firstinspires.ftc.teamcode.data.protocol.DebugManifest) body_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      body_ = value;
+    }
+    bodyCase_ = 20;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugManifest debug_manifest = 20;</code>
+   */
+  private void clearDebugManifest() {
+    if (bodyCase_ == 20) {
+      bodyCase_ = 0;
+      body_ = null;
+    }
+  }
+
+  public static final int DEBUG_SELECT_REQUEST_FIELD_NUMBER = 21;
+  /**
+   * <code>.ftc.robotdata.v2.DebugSelectRequest debug_select_request = 21;</code>
+   */
+  @java.lang.Override
+  public boolean hasDebugSelectRequest() {
+    return bodyCase_ == 21;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugSelectRequest debug_select_request = 21;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugSelectRequest getDebugSelectRequest() {
+    if (bodyCase_ == 21) {
+       return (org.firstinspires.ftc.teamcode.data.protocol.DebugSelectRequest) body_;
+    }
+    return org.firstinspires.ftc.teamcode.data.protocol.DebugSelectRequest.getDefaultInstance();
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugSelectRequest debug_select_request = 21;</code>
+   */
+  private void setDebugSelectRequest(org.firstinspires.ftc.teamcode.data.protocol.DebugSelectRequest value) {
+    value.getClass();
+  body_ = value;
+    bodyCase_ = 21;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugSelectRequest debug_select_request = 21;</code>
+   */
+  private void mergeDebugSelectRequest(org.firstinspires.ftc.teamcode.data.protocol.DebugSelectRequest value) {
+    value.getClass();
+  if (bodyCase_ == 21 &&
+        body_ != org.firstinspires.ftc.teamcode.data.protocol.DebugSelectRequest.getDefaultInstance()) {
+      body_ = org.firstinspires.ftc.teamcode.data.protocol.DebugSelectRequest.newBuilder((org.firstinspires.ftc.teamcode.data.protocol.DebugSelectRequest) body_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      body_ = value;
+    }
+    bodyCase_ = 21;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugSelectRequest debug_select_request = 21;</code>
+   */
+  private void clearDebugSelectRequest() {
+    if (bodyCase_ == 21) {
+      bodyCase_ = 0;
+      body_ = null;
+    }
+  }
+
+  public static final int DEBUG_SELECT_RESPONSE_FIELD_NUMBER = 22;
+  /**
+   * <code>.ftc.robotdata.v2.DebugSelectResponse debug_select_response = 22;</code>
+   */
+  @java.lang.Override
+  public boolean hasDebugSelectResponse() {
+    return bodyCase_ == 22;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugSelectResponse debug_select_response = 22;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugSelectResponse getDebugSelectResponse() {
+    if (bodyCase_ == 22) {
+       return (org.firstinspires.ftc.teamcode.data.protocol.DebugSelectResponse) body_;
+    }
+    return org.firstinspires.ftc.teamcode.data.protocol.DebugSelectResponse.getDefaultInstance();
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugSelectResponse debug_select_response = 22;</code>
+   */
+  private void setDebugSelectResponse(org.firstinspires.ftc.teamcode.data.protocol.DebugSelectResponse value) {
+    value.getClass();
+  body_ = value;
+    bodyCase_ = 22;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugSelectResponse debug_select_response = 22;</code>
+   */
+  private void mergeDebugSelectResponse(org.firstinspires.ftc.teamcode.data.protocol.DebugSelectResponse value) {
+    value.getClass();
+  if (bodyCase_ == 22 &&
+        body_ != org.firstinspires.ftc.teamcode.data.protocol.DebugSelectResponse.getDefaultInstance()) {
+      body_ = org.firstinspires.ftc.teamcode.data.protocol.DebugSelectResponse.newBuilder((org.firstinspires.ftc.teamcode.data.protocol.DebugSelectResponse) body_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      body_ = value;
+    }
+    bodyCase_ = 22;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugSelectResponse debug_select_response = 22;</code>
+   */
+  private void clearDebugSelectResponse() {
+    if (bodyCase_ == 22) {
+      bodyCase_ = 0;
+      body_ = null;
+    }
+  }
+
+  public static final int DEBUG_TOOL_READY_FIELD_NUMBER = 23;
+  /**
+   * <code>.ftc.robotdata.v2.DebugToolReady debug_tool_ready = 23;</code>
+   */
+  @java.lang.Override
+  public boolean hasDebugToolReady() {
+    return bodyCase_ == 23;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugToolReady debug_tool_ready = 23;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady getDebugToolReady() {
+    if (bodyCase_ == 23) {
+       return (org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady) body_;
+    }
+    return org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady.getDefaultInstance();
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugToolReady debug_tool_ready = 23;</code>
+   */
+  private void setDebugToolReady(org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady value) {
+    value.getClass();
+  body_ = value;
+    bodyCase_ = 23;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugToolReady debug_tool_ready = 23;</code>
+   */
+  private void mergeDebugToolReady(org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady value) {
+    value.getClass();
+  if (bodyCase_ == 23 &&
+        body_ != org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady.getDefaultInstance()) {
+      body_ = org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady.newBuilder((org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady) body_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      body_ = value;
+    }
+    bodyCase_ = 23;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugToolReady debug_tool_ready = 23;</code>
+   */
+  private void clearDebugToolReady() {
+    if (bodyCase_ == 23) {
+      bodyCase_ = 0;
+      body_ = null;
+    }
+  }
+
+  public static final int DEBUG_TOOL_STATE_FIELD_NUMBER = 24;
+  /**
+   * <code>.ftc.robotdata.v2.DebugToolState debug_tool_state = 24;</code>
+   */
+  @java.lang.Override
+  public boolean hasDebugToolState() {
+    return bodyCase_ == 24;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugToolState debug_tool_state = 24;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugToolState getDebugToolState() {
+    if (bodyCase_ == 24) {
+       return (org.firstinspires.ftc.teamcode.data.protocol.DebugToolState) body_;
+    }
+    return org.firstinspires.ftc.teamcode.data.protocol.DebugToolState.getDefaultInstance();
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugToolState debug_tool_state = 24;</code>
+   */
+  private void setDebugToolState(org.firstinspires.ftc.teamcode.data.protocol.DebugToolState value) {
+    value.getClass();
+  body_ = value;
+    bodyCase_ = 24;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugToolState debug_tool_state = 24;</code>
+   */
+  private void mergeDebugToolState(org.firstinspires.ftc.teamcode.data.protocol.DebugToolState value) {
+    value.getClass();
+  if (bodyCase_ == 24 &&
+        body_ != org.firstinspires.ftc.teamcode.data.protocol.DebugToolState.getDefaultInstance()) {
+      body_ = org.firstinspires.ftc.teamcode.data.protocol.DebugToolState.newBuilder((org.firstinspires.ftc.teamcode.data.protocol.DebugToolState) body_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      body_ = value;
+    }
+    bodyCase_ = 24;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugToolState debug_tool_state = 24;</code>
+   */
+  private void clearDebugToolState() {
+    if (bodyCase_ == 24) {
+      bodyCase_ = 0;
+      body_ = null;
+    }
+  }
+
+  public static final int DEBUG_PARAMETER_SET_REQUEST_FIELD_NUMBER = 25;
+  /**
+   * <code>.ftc.robotdata.v2.DebugParameterSetRequest debug_parameter_set_request = 25;</code>
+   */
+  @java.lang.Override
+  public boolean hasDebugParameterSetRequest() {
+    return bodyCase_ == 25;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugParameterSetRequest debug_parameter_set_request = 25;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetRequest getDebugParameterSetRequest() {
+    if (bodyCase_ == 25) {
+       return (org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetRequest) body_;
+    }
+    return org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetRequest.getDefaultInstance();
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugParameterSetRequest debug_parameter_set_request = 25;</code>
+   */
+  private void setDebugParameterSetRequest(org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetRequest value) {
+    value.getClass();
+  body_ = value;
+    bodyCase_ = 25;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugParameterSetRequest debug_parameter_set_request = 25;</code>
+   */
+  private void mergeDebugParameterSetRequest(org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetRequest value) {
+    value.getClass();
+  if (bodyCase_ == 25 &&
+        body_ != org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetRequest.getDefaultInstance()) {
+      body_ = org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetRequest.newBuilder((org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetRequest) body_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      body_ = value;
+    }
+    bodyCase_ = 25;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugParameterSetRequest debug_parameter_set_request = 25;</code>
+   */
+  private void clearDebugParameterSetRequest() {
+    if (bodyCase_ == 25) {
+      bodyCase_ = 0;
+      body_ = null;
+    }
+  }
+
+  public static final int DEBUG_PARAMETER_SET_RESPONSE_FIELD_NUMBER = 26;
+  /**
+   * <code>.ftc.robotdata.v2.DebugParameterSetResponse debug_parameter_set_response = 26;</code>
+   */
+  @java.lang.Override
+  public boolean hasDebugParameterSetResponse() {
+    return bodyCase_ == 26;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugParameterSetResponse debug_parameter_set_response = 26;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetResponse getDebugParameterSetResponse() {
+    if (bodyCase_ == 26) {
+       return (org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetResponse) body_;
+    }
+    return org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetResponse.getDefaultInstance();
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugParameterSetResponse debug_parameter_set_response = 26;</code>
+   */
+  private void setDebugParameterSetResponse(org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetResponse value) {
+    value.getClass();
+  body_ = value;
+    bodyCase_ = 26;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugParameterSetResponse debug_parameter_set_response = 26;</code>
+   */
+  private void mergeDebugParameterSetResponse(org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetResponse value) {
+    value.getClass();
+  if (bodyCase_ == 26 &&
+        body_ != org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetResponse.getDefaultInstance()) {
+      body_ = org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetResponse.newBuilder((org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetResponse) body_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      body_ = value;
+    }
+    bodyCase_ = 26;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugParameterSetResponse debug_parameter_set_response = 26;</code>
+   */
+  private void clearDebugParameterSetResponse() {
+    if (bodyCase_ == 26) {
+      bodyCase_ = 0;
+      body_ = null;
+    }
+  }
+
+  public static final int DEBUG_COMMAND_REQUEST_FIELD_NUMBER = 27;
+  /**
+   * <code>.ftc.robotdata.v2.DebugCommandRequest debug_command_request = 27;</code>
+   */
+  @java.lang.Override
+  public boolean hasDebugCommandRequest() {
+    return bodyCase_ == 27;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugCommandRequest debug_command_request = 27;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest getDebugCommandRequest() {
+    if (bodyCase_ == 27) {
+       return (org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest) body_;
+    }
+    return org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest.getDefaultInstance();
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugCommandRequest debug_command_request = 27;</code>
+   */
+  private void setDebugCommandRequest(org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest value) {
+    value.getClass();
+  body_ = value;
+    bodyCase_ = 27;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugCommandRequest debug_command_request = 27;</code>
+   */
+  private void mergeDebugCommandRequest(org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest value) {
+    value.getClass();
+  if (bodyCase_ == 27 &&
+        body_ != org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest.getDefaultInstance()) {
+      body_ = org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest.newBuilder((org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest) body_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      body_ = value;
+    }
+    bodyCase_ = 27;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugCommandRequest debug_command_request = 27;</code>
+   */
+  private void clearDebugCommandRequest() {
+    if (bodyCase_ == 27) {
+      bodyCase_ = 0;
+      body_ = null;
+    }
+  }
+
+  public static final int DEBUG_COMMAND_RESPONSE_FIELD_NUMBER = 28;
+  /**
+   * <code>.ftc.robotdata.v2.DebugCommandResponse debug_command_response = 28;</code>
+   */
+  @java.lang.Override
+  public boolean hasDebugCommandResponse() {
+    return bodyCase_ == 28;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugCommandResponse debug_command_response = 28;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse getDebugCommandResponse() {
+    if (bodyCase_ == 28) {
+       return (org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse) body_;
+    }
+    return org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse.getDefaultInstance();
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugCommandResponse debug_command_response = 28;</code>
+   */
+  private void setDebugCommandResponse(org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse value) {
+    value.getClass();
+  body_ = value;
+    bodyCase_ = 28;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugCommandResponse debug_command_response = 28;</code>
+   */
+  private void mergeDebugCommandResponse(org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse value) {
+    value.getClass();
+  if (bodyCase_ == 28 &&
+        body_ != org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse.getDefaultInstance()) {
+      body_ = org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse.newBuilder((org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse) body_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      body_ = value;
+    }
+    bodyCase_ = 28;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugCommandResponse debug_command_response = 28;</code>
+   */
+  private void clearDebugCommandResponse() {
+    if (bodyCase_ == 28) {
+      bodyCase_ = 0;
+      body_ = null;
+    }
+  }
+
+  public static final int DEBUG_SAFETY_STATE_FIELD_NUMBER = 29;
+  /**
+   * <code>.ftc.robotdata.v2.DebugSafetyState debug_safety_state = 29;</code>
+   */
+  @java.lang.Override
+  public boolean hasDebugSafetyState() {
+    return bodyCase_ == 29;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugSafetyState debug_safety_state = 29;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState getDebugSafetyState() {
+    if (bodyCase_ == 29) {
+       return (org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState) body_;
+    }
+    return org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState.getDefaultInstance();
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugSafetyState debug_safety_state = 29;</code>
+   */
+  private void setDebugSafetyState(org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState value) {
+    value.getClass();
+  body_ = value;
+    bodyCase_ = 29;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugSafetyState debug_safety_state = 29;</code>
+   */
+  private void mergeDebugSafetyState(org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState value) {
+    value.getClass();
+  if (bodyCase_ == 29 &&
+        body_ != org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState.getDefaultInstance()) {
+      body_ = org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState.newBuilder((org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState) body_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      body_ = value;
+    }
+    bodyCase_ = 29;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugSafetyState debug_safety_state = 29;</code>
+   */
+  private void clearDebugSafetyState() {
+    if (bodyCase_ == 29) {
       bodyCase_ = 0;
       body_ = null;
     }
@@ -1494,6 +2014,486 @@ public  final class Envelope extends
       return this;
     }
 
+    /**
+     * <code>.ftc.robotdata.v2.DebugManifest debug_manifest = 20;</code>
+     */
+    @java.lang.Override
+    public boolean hasDebugManifest() {
+      return instance.hasDebugManifest();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugManifest debug_manifest = 20;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugManifest getDebugManifest() {
+      return instance.getDebugManifest();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugManifest debug_manifest = 20;</code>
+     */
+    public Builder setDebugManifest(org.firstinspires.ftc.teamcode.data.protocol.DebugManifest value) {
+      copyOnWrite();
+      instance.setDebugManifest(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugManifest debug_manifest = 20;</code>
+     */
+    public Builder setDebugManifest(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugManifest.Builder builderForValue) {
+      copyOnWrite();
+      instance.setDebugManifest(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugManifest debug_manifest = 20;</code>
+     */
+    public Builder mergeDebugManifest(org.firstinspires.ftc.teamcode.data.protocol.DebugManifest value) {
+      copyOnWrite();
+      instance.mergeDebugManifest(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugManifest debug_manifest = 20;</code>
+     */
+    public Builder clearDebugManifest() {
+      copyOnWrite();
+      instance.clearDebugManifest();
+      return this;
+    }
+
+    /**
+     * <code>.ftc.robotdata.v2.DebugSelectRequest debug_select_request = 21;</code>
+     */
+    @java.lang.Override
+    public boolean hasDebugSelectRequest() {
+      return instance.hasDebugSelectRequest();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugSelectRequest debug_select_request = 21;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugSelectRequest getDebugSelectRequest() {
+      return instance.getDebugSelectRequest();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugSelectRequest debug_select_request = 21;</code>
+     */
+    public Builder setDebugSelectRequest(org.firstinspires.ftc.teamcode.data.protocol.DebugSelectRequest value) {
+      copyOnWrite();
+      instance.setDebugSelectRequest(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugSelectRequest debug_select_request = 21;</code>
+     */
+    public Builder setDebugSelectRequest(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugSelectRequest.Builder builderForValue) {
+      copyOnWrite();
+      instance.setDebugSelectRequest(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugSelectRequest debug_select_request = 21;</code>
+     */
+    public Builder mergeDebugSelectRequest(org.firstinspires.ftc.teamcode.data.protocol.DebugSelectRequest value) {
+      copyOnWrite();
+      instance.mergeDebugSelectRequest(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugSelectRequest debug_select_request = 21;</code>
+     */
+    public Builder clearDebugSelectRequest() {
+      copyOnWrite();
+      instance.clearDebugSelectRequest();
+      return this;
+    }
+
+    /**
+     * <code>.ftc.robotdata.v2.DebugSelectResponse debug_select_response = 22;</code>
+     */
+    @java.lang.Override
+    public boolean hasDebugSelectResponse() {
+      return instance.hasDebugSelectResponse();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugSelectResponse debug_select_response = 22;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugSelectResponse getDebugSelectResponse() {
+      return instance.getDebugSelectResponse();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugSelectResponse debug_select_response = 22;</code>
+     */
+    public Builder setDebugSelectResponse(org.firstinspires.ftc.teamcode.data.protocol.DebugSelectResponse value) {
+      copyOnWrite();
+      instance.setDebugSelectResponse(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugSelectResponse debug_select_response = 22;</code>
+     */
+    public Builder setDebugSelectResponse(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugSelectResponse.Builder builderForValue) {
+      copyOnWrite();
+      instance.setDebugSelectResponse(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugSelectResponse debug_select_response = 22;</code>
+     */
+    public Builder mergeDebugSelectResponse(org.firstinspires.ftc.teamcode.data.protocol.DebugSelectResponse value) {
+      copyOnWrite();
+      instance.mergeDebugSelectResponse(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugSelectResponse debug_select_response = 22;</code>
+     */
+    public Builder clearDebugSelectResponse() {
+      copyOnWrite();
+      instance.clearDebugSelectResponse();
+      return this;
+    }
+
+    /**
+     * <code>.ftc.robotdata.v2.DebugToolReady debug_tool_ready = 23;</code>
+     */
+    @java.lang.Override
+    public boolean hasDebugToolReady() {
+      return instance.hasDebugToolReady();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugToolReady debug_tool_ready = 23;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady getDebugToolReady() {
+      return instance.getDebugToolReady();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugToolReady debug_tool_ready = 23;</code>
+     */
+    public Builder setDebugToolReady(org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady value) {
+      copyOnWrite();
+      instance.setDebugToolReady(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugToolReady debug_tool_ready = 23;</code>
+     */
+    public Builder setDebugToolReady(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady.Builder builderForValue) {
+      copyOnWrite();
+      instance.setDebugToolReady(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugToolReady debug_tool_ready = 23;</code>
+     */
+    public Builder mergeDebugToolReady(org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady value) {
+      copyOnWrite();
+      instance.mergeDebugToolReady(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugToolReady debug_tool_ready = 23;</code>
+     */
+    public Builder clearDebugToolReady() {
+      copyOnWrite();
+      instance.clearDebugToolReady();
+      return this;
+    }
+
+    /**
+     * <code>.ftc.robotdata.v2.DebugToolState debug_tool_state = 24;</code>
+     */
+    @java.lang.Override
+    public boolean hasDebugToolState() {
+      return instance.hasDebugToolState();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugToolState debug_tool_state = 24;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugToolState getDebugToolState() {
+      return instance.getDebugToolState();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugToolState debug_tool_state = 24;</code>
+     */
+    public Builder setDebugToolState(org.firstinspires.ftc.teamcode.data.protocol.DebugToolState value) {
+      copyOnWrite();
+      instance.setDebugToolState(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugToolState debug_tool_state = 24;</code>
+     */
+    public Builder setDebugToolState(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugToolState.Builder builderForValue) {
+      copyOnWrite();
+      instance.setDebugToolState(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugToolState debug_tool_state = 24;</code>
+     */
+    public Builder mergeDebugToolState(org.firstinspires.ftc.teamcode.data.protocol.DebugToolState value) {
+      copyOnWrite();
+      instance.mergeDebugToolState(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugToolState debug_tool_state = 24;</code>
+     */
+    public Builder clearDebugToolState() {
+      copyOnWrite();
+      instance.clearDebugToolState();
+      return this;
+    }
+
+    /**
+     * <code>.ftc.robotdata.v2.DebugParameterSetRequest debug_parameter_set_request = 25;</code>
+     */
+    @java.lang.Override
+    public boolean hasDebugParameterSetRequest() {
+      return instance.hasDebugParameterSetRequest();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugParameterSetRequest debug_parameter_set_request = 25;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetRequest getDebugParameterSetRequest() {
+      return instance.getDebugParameterSetRequest();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugParameterSetRequest debug_parameter_set_request = 25;</code>
+     */
+    public Builder setDebugParameterSetRequest(org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetRequest value) {
+      copyOnWrite();
+      instance.setDebugParameterSetRequest(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugParameterSetRequest debug_parameter_set_request = 25;</code>
+     */
+    public Builder setDebugParameterSetRequest(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetRequest.Builder builderForValue) {
+      copyOnWrite();
+      instance.setDebugParameterSetRequest(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugParameterSetRequest debug_parameter_set_request = 25;</code>
+     */
+    public Builder mergeDebugParameterSetRequest(org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetRequest value) {
+      copyOnWrite();
+      instance.mergeDebugParameterSetRequest(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugParameterSetRequest debug_parameter_set_request = 25;</code>
+     */
+    public Builder clearDebugParameterSetRequest() {
+      copyOnWrite();
+      instance.clearDebugParameterSetRequest();
+      return this;
+    }
+
+    /**
+     * <code>.ftc.robotdata.v2.DebugParameterSetResponse debug_parameter_set_response = 26;</code>
+     */
+    @java.lang.Override
+    public boolean hasDebugParameterSetResponse() {
+      return instance.hasDebugParameterSetResponse();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugParameterSetResponse debug_parameter_set_response = 26;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetResponse getDebugParameterSetResponse() {
+      return instance.getDebugParameterSetResponse();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugParameterSetResponse debug_parameter_set_response = 26;</code>
+     */
+    public Builder setDebugParameterSetResponse(org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetResponse value) {
+      copyOnWrite();
+      instance.setDebugParameterSetResponse(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugParameterSetResponse debug_parameter_set_response = 26;</code>
+     */
+    public Builder setDebugParameterSetResponse(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetResponse.Builder builderForValue) {
+      copyOnWrite();
+      instance.setDebugParameterSetResponse(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugParameterSetResponse debug_parameter_set_response = 26;</code>
+     */
+    public Builder mergeDebugParameterSetResponse(org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetResponse value) {
+      copyOnWrite();
+      instance.mergeDebugParameterSetResponse(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugParameterSetResponse debug_parameter_set_response = 26;</code>
+     */
+    public Builder clearDebugParameterSetResponse() {
+      copyOnWrite();
+      instance.clearDebugParameterSetResponse();
+      return this;
+    }
+
+    /**
+     * <code>.ftc.robotdata.v2.DebugCommandRequest debug_command_request = 27;</code>
+     */
+    @java.lang.Override
+    public boolean hasDebugCommandRequest() {
+      return instance.hasDebugCommandRequest();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugCommandRequest debug_command_request = 27;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest getDebugCommandRequest() {
+      return instance.getDebugCommandRequest();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugCommandRequest debug_command_request = 27;</code>
+     */
+    public Builder setDebugCommandRequest(org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest value) {
+      copyOnWrite();
+      instance.setDebugCommandRequest(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugCommandRequest debug_command_request = 27;</code>
+     */
+    public Builder setDebugCommandRequest(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest.Builder builderForValue) {
+      copyOnWrite();
+      instance.setDebugCommandRequest(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugCommandRequest debug_command_request = 27;</code>
+     */
+    public Builder mergeDebugCommandRequest(org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest value) {
+      copyOnWrite();
+      instance.mergeDebugCommandRequest(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugCommandRequest debug_command_request = 27;</code>
+     */
+    public Builder clearDebugCommandRequest() {
+      copyOnWrite();
+      instance.clearDebugCommandRequest();
+      return this;
+    }
+
+    /**
+     * <code>.ftc.robotdata.v2.DebugCommandResponse debug_command_response = 28;</code>
+     */
+    @java.lang.Override
+    public boolean hasDebugCommandResponse() {
+      return instance.hasDebugCommandResponse();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugCommandResponse debug_command_response = 28;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse getDebugCommandResponse() {
+      return instance.getDebugCommandResponse();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugCommandResponse debug_command_response = 28;</code>
+     */
+    public Builder setDebugCommandResponse(org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse value) {
+      copyOnWrite();
+      instance.setDebugCommandResponse(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugCommandResponse debug_command_response = 28;</code>
+     */
+    public Builder setDebugCommandResponse(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse.Builder builderForValue) {
+      copyOnWrite();
+      instance.setDebugCommandResponse(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugCommandResponse debug_command_response = 28;</code>
+     */
+    public Builder mergeDebugCommandResponse(org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse value) {
+      copyOnWrite();
+      instance.mergeDebugCommandResponse(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugCommandResponse debug_command_response = 28;</code>
+     */
+    public Builder clearDebugCommandResponse() {
+      copyOnWrite();
+      instance.clearDebugCommandResponse();
+      return this;
+    }
+
+    /**
+     * <code>.ftc.robotdata.v2.DebugSafetyState debug_safety_state = 29;</code>
+     */
+    @java.lang.Override
+    public boolean hasDebugSafetyState() {
+      return instance.hasDebugSafetyState();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugSafetyState debug_safety_state = 29;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState getDebugSafetyState() {
+      return instance.getDebugSafetyState();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugSafetyState debug_safety_state = 29;</code>
+     */
+    public Builder setDebugSafetyState(org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState value) {
+      copyOnWrite();
+      instance.setDebugSafetyState(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugSafetyState debug_safety_state = 29;</code>
+     */
+    public Builder setDebugSafetyState(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState.Builder builderForValue) {
+      copyOnWrite();
+      instance.setDebugSafetyState(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugSafetyState debug_safety_state = 29;</code>
+     */
+    public Builder mergeDebugSafetyState(org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState value) {
+      copyOnWrite();
+      instance.mergeDebugSafetyState(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugSafetyState debug_safety_state = 29;</code>
+     */
+    public Builder clearDebugSafetyState() {
+      copyOnWrite();
+      instance.clearDebugSafetyState();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:ftc.robotdata.v2.Envelope)
   }
   @java.lang.Override
@@ -1527,11 +2527,23 @@ public  final class Envelope extends
             org.firstinspires.ftc.teamcode.data.protocol.SessionEnd.class,
             org.firstinspires.ftc.teamcode.data.protocol.GamepadSnapshot.class,
             org.firstinspires.ftc.teamcode.data.protocol.ProtocolError.class,
+            org.firstinspires.ftc.teamcode.data.protocol.DebugManifest.class,
+            org.firstinspires.ftc.teamcode.data.protocol.DebugSelectRequest.class,
+            org.firstinspires.ftc.teamcode.data.protocol.DebugSelectResponse.class,
+            org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady.class,
+            org.firstinspires.ftc.teamcode.data.protocol.DebugToolState.class,
+            org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetRequest.class,
+            org.firstinspires.ftc.teamcode.data.protocol.DebugParameterSetResponse.class,
+            org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest.class,
+            org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse.class,
+            org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState.class,
           };
           java.lang.String info =
-              "\u0000\u000f\u0001\u0000\u0001\u0013\u000f\u0000\u0000\u0000\u0001\u000b\u0002\n" +
+              "\u0000\u0019\u0001\u0000\u0001\u001d\u0019\u0000\u0000\u0000\u0001\u000b\u0002\n" +
               "\u0003\n\u0004\u0003\u0005\u0003\n<\u0000\u000b<\u0000\f<\u0000\r<\u0000\u000e<\u0000" +
-              "\u000f<\u0000\u0010<\u0000\u0011<\u0000\u0012<\u0000\u0013<\u0000";
+              "\u000f<\u0000\u0010<\u0000\u0011<\u0000\u0012<\u0000\u0013<\u0000\u0014<\u0000\u0015" +
+              "<\u0000\u0016<\u0000\u0017<\u0000\u0018<\u0000\u0019<\u0000\u001a<\u0000\u001b<\u0000" +
+              "\u001c<\u0000\u001d<\u0000";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       // fall through

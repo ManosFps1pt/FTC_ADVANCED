@@ -53,9 +53,10 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
 
 @dataclass(frozen=True, slots=True)
 class ReceivedRobotPacket:
-    """One protobuf frame plus normalized records and receipt information."""
+    """One exact protobuf frame plus normalized records and receipt information."""
 
     envelope: wire.Envelope
+    protobuf_frame: bytes
     payloads: tuple[Mapping[str, Any], ...]
     peer: tuple[str, int] | None
     received_monotonic_ns: int
@@ -68,6 +69,7 @@ class ReceivedRobotPacket:
 
 PacketReply = wire.Envelope
 PacketHandler = Callable[[ReceivedRobotPacket], Awaitable[PacketReply | None] | PacketReply | None]
+RawPacketHandler = Callable[[wire.Envelope, bytes, tuple[str, int] | None, int], Awaitable[None] | None]
 ConnectionHandler = Callable[[bool, tuple[str, int] | None], Awaitable[None] | None]
 
 
@@ -76,16 +78,18 @@ class RobotDataTcpServer:
 
     def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, *, discovery_port: int = DEFAULT_DISCOVERY_PORT,
                  max_packet_bytes: int = DEFAULT_MAX_PACKET_BYTES, packet_handler: PacketHandler | None = None,
-                 connection_handler: ConnectionHandler | None = None) -> None:
+                 raw_packet_handler: RawPacketHandler | None = None, connection_handler: ConnectionHandler | None = None) -> None:
         if not 0 <= port <= 65535 or not 0 < discovery_port <= 65535:
             raise ValueError("TCP port must be between 0 and 65535; discovery port must be between 1 and 65535")
         if max_packet_bytes <= 0:
             raise ValueError("max_packet_bytes must be positive")
         self.host, self.port, self.discovery_port, self.max_packet_bytes = host, port, discovery_port, max_packet_bytes
-        self._packet_handler, self._connection_handler = packet_handler, connection_handler
+        self._packet_handler, self._raw_packet_handler, self._connection_handler = packet_handler, raw_packet_handler, connection_handler
         self._server: asyncio.Server | None = None
         self._discovery_transport: asyncio.DatagramTransport | None = None
         self._clients: set[asyncio.StreamWriter] = set()
+        self._writers: dict[tuple[str, int], asyncio.StreamWriter] = {}
+        self._writer_locks: dict[asyncio.StreamWriter, asyncio.Lock] = {}
         self._last_packet: ReceivedRobotPacket | None = None
 
     @property
@@ -117,10 +121,32 @@ class RobotDataTcpServer:
         if server is not None: await server.wait_closed()
         if clients: await asyncio.gather(*(writer.wait_closed() for writer in clients), return_exceptions=True)
         self._clients.clear()
+        self._writers.clear()
+        self._writer_locks.clear()
+
+    async def send(self, envelope: wire.Envelope, peer: tuple[str, int] | None = None) -> None:
+        """Send one framed protobuf message to the active robot connection.
+
+        This is the server-to-robot half of the full-duplex debug channel. A
+        caller may omit ``peer`` when the server has exactly one robot client.
+        """
+
+        if peer is None:
+            if len(self._writers) != 1:
+                raise RobotDataProtocolError("exactly one robot TCP connection is required")
+            writer = next(iter(self._writers.values()))
+        else:
+            writer = self._writers.get(peer)
+            if writer is None:
+                raise RobotDataProtocolError("robot TCP connection is not active")
+        await self._write_packet(writer, envelope)
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         self._clients.add(writer)
         peer = _normalize_peer(writer.get_extra_info("peername"))
+        if peer is not None:
+            self._writers[peer] = writer
+        self._writer_locks[writer] = asyncio.Lock()
         channel_keys: dict[int, tuple[str, int]] = {}
         await self._notify_connection(True, peer)
         try:
@@ -131,10 +157,14 @@ class RobotDataTcpServer:
                 encoded = await reader.readexactly(length)
                 try:
                     envelope = wire.Envelope.FromString(encoded)
+                    received_monotonic_ns = time.perf_counter_ns()
+                    if self._raw_packet_handler is not None:
+                        result = self._raw_packet_handler(envelope, encoded, peer, received_monotonic_ns)
+                        if inspect.isawaitable(result): await result
                     payloads = decode(envelope, channel_keys)
                 except (DecodeError, ValueError, WireProtocolError) as error:
                     raise RobotDataProtocolError(str(error)) from error
-                packet = ReceivedRobotPacket(envelope, payloads, peer, time.perf_counter_ns())
+                packet = ReceivedRobotPacket(envelope, encoded, payloads, peer, received_monotonic_ns)
                 self._last_packet = packet
                 if self._packet_handler is not None:
                     result = self._packet_handler(packet)
@@ -143,7 +173,11 @@ class RobotDataTcpServer:
         except (asyncio.IncompleteReadError, ConnectionError, RobotDataProtocolError):
             pass
         finally:
-            self._clients.discard(writer); await self._notify_connection(False, peer); writer.close()
+            self._clients.discard(writer)
+            if peer is not None and self._writers.get(peer) is writer:
+                self._writers.pop(peer, None)
+            self._writer_locks.pop(writer, None)
+            await self._notify_connection(False, peer); writer.close()
             try: await writer.wait_closed()
             except ConnectionError: pass
 
@@ -155,7 +189,9 @@ class RobotDataTcpServer:
     async def _write_packet(self, writer: asyncio.StreamWriter, envelope: wire.Envelope) -> None:
         encoded = envelope.SerializeToString()
         if not encoded or len(encoded) > self.max_packet_bytes: raise RobotDataProtocolError("invalid response frame length")
-        writer.write(_LENGTH_PREFIX.pack(len(encoded)) + encoded); await writer.drain()
+        lock = self._writer_locks.setdefault(writer, asyncio.Lock())
+        async with lock:
+            writer.write(_LENGTH_PREFIX.pack(len(encoded)) + encoded); await writer.drain()
 
 
 def _normalize_peer(value: object) -> tuple[str, int] | None:

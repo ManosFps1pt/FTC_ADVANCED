@@ -6,7 +6,8 @@ button, input, select { font: inherit; }
 button { border: 0; border-radius: 9px; padding: .65rem .9rem; color: #ecf5ff; background: #20324a; cursor: pointer; font-weight: 700; transition: background .15s, transform .15s; }
 button:hover:not(:disabled) { background: #2e4e72; transform: translateY(-1px); }
 button:disabled, input:disabled { opacity: .48; cursor: not-allowed; }
-main { width: min(1440px, calc(100% - 2rem)); margin: 0 auto; padding: 2rem 0 3rem; }
+/* Dashboards should use the available display, not a website-style max width. */
+main { width: calc(100% - 1.5rem); margin: 0 auto; padding: 2rem 0 3rem; }
 .hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1.25rem; }
 h1, h2, h3, p { margin-top: 0; } h1 { font-size: clamp(2rem, 5vw, 3.1rem); letter-spacing: -.06em; margin-bottom: .5rem; } h2 { margin-bottom: 0; font-size: 1.2rem; } h3 { font-size: .9rem; margin: 1.1rem 0 .65rem; color: #b9c8da; }
 .eyebrow { color: #7dc4ff; text-transform: uppercase; letter-spacing: .12em; font-size: .7rem; font-weight: 800; margin-bottom: .4rem; } .subhead, .empty-state { color: #9fb0c4; max-width: 47rem; }
@@ -58,5 +59,88 @@ label { display: grid; gap: .35rem; font-size: .8rem; font-weight: 700; color: #
 @media (max-width: 930px) { .dashboard-grid, .graph-workspace { grid-template-columns: 1fr; }.connection-panel { grid-template-columns: 1fr auto; }.notice { grid-column: 1 / -1; }.controller-layout { grid-template-columns: 1fr; }.portal-card { flex-direction: column; }.port-row, .i2c-row { grid-template-columns: 1fr; }.inline-field { grid-template-columns: 1fr; }.hero, .driver-status, .robot-data-header, .telemetry-summary { flex-direction: column; align-items: stretch; }.graph-picker { position: static; }.telemetry-summary dl { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 1050px) { .driver-dashboard { height: auto; min-height: 100dvh; overflow: visible; }.driver-topbar { align-items: flex-start; flex-direction: column; }.topbar-status { justify-content: flex-start; }.driver-command-row { grid-template-columns: 1fr; }.driver-dashboard .dashboard-grid { overflow: visible; }.driver-dashboard .gamepad, .driver-dashboard .telemetry { overflow: visible; } }
 @media (max-width: 1050px) { .telemetry-dashboard { height: auto; min-height: 100dvh; overflow: visible; }.telemetry-editor { grid-template-columns: 1fr; overflow: visible; }.trace-stack { min-height: 22rem; }.trace-picker { max-height: 16rem; overflow: auto; }.controller-stack { min-height: 15rem; }.timeline-viewport { overflow-x: auto; } }
+
+.telemetry-dashboard { grid-template-rows: auto auto auto minmax(0, 1fr); }
+.motor-monitor-section { padding: .75rem; }
+.motor-monitor-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: .55rem; }
+.motor-monitor-section-heading h2 { margin: .1rem 0 0; }
+.motor-monitor-section-heading > span { color: #9eb4c8; font: .68rem ui-monospace, monospace; text-transform: uppercase; letter-spacing: .08em; }
+.motor-monitor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: .55rem; }
+.motor-monitor-card { min-width: 0; padding: .7rem; border: 1px solid #2b5272; border-radius: 9px; background: linear-gradient(135deg, #0b2138, #091a2e); }
+.motor-monitor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: .6rem; margin-bottom: .55rem; }
+.motor-monitor-heading .eyebrow { margin-bottom: .1rem; font-size: .58rem; }
+.motor-monitor-heading strong { display: block; overflow: hidden; color: #e9f5ff; font-size: .82rem; text-overflow: ellipsis; white-space: nowrap; }
+.motor-monitor-heading > span { padding: .2rem .35rem; border: 1px solid #36536d; border-radius: 4px; color: #9eb4c8; font: .58rem ui-monospace, monospace; letter-spacing: .08em; }
+.motor-monitor-heading > span.motor-live { border-color: #31805b; color: #9de6c4; background: rgb(22 100 66 / .22); }
+.motor-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .3rem .6rem; margin: 0; }
+.motor-metrics > div { min-width: 0; padding-top: .3rem; border-top: 1px solid #1c3b56; }
+.motor-metrics dt { overflow: hidden; color: #8ea6bd; font-size: .61rem; text-overflow: ellipsis; white-space: nowrap; }
+.motor-metrics dd { margin: .08rem 0 0; overflow: hidden; color: #c9f2de; font: .76rem ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
+
+.tcp-command-panel { display: grid; gap: .55rem; padding: .7rem .85rem; }
+.tcp-command-panel .panel-heading { margin-bottom: 0; }
+.tcp-command-panel .panel-heading > span { color: #9eb4c8; }
+.tcp-command-panel .panel-heading > span.alliance-ready { color: #9de6c4; }
+.command-card-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); gap: .55rem; }
+.command-card { display: grid; gap: .55rem; padding: .7rem; border: 1px solid #2b5272; border-radius: 9px; background: linear-gradient(135deg, #0b2138, #091a2e); }
+.command-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: .8rem; }
+.command-card-heading .eyebrow { margin-bottom: .1rem; font-size: .58rem; }
+.command-card-heading strong { display: block; color: #e9f5ff; font-size: .86rem; }
+.command-card-heading code { display: block; margin-top: .18rem; color: #86a7c1; font: .62rem ui-monospace, monospace; }
+.command-description, .command-no-arguments { margin: 0; color: #a9b9ca; font-size: .72rem; line-height: 1.4; }
+.command-arguments { display: grid; gap: .45rem; }
+.command-argument { display: grid; gap: .25rem; min-width: 0; }
+.command-argument-label, .command-enum legend { color: #c4d6e7; font-size: .68rem; font-weight: 800; }
+.command-argument small { color: #839bb0; font-size: .6rem; line-height: 1.3; }
+.command-argument input { padding: .45rem .55rem; font-size: .72rem; }
+.command-argument-unit { color: #74c9ff !important; font-family: ui-monospace, monospace; }
+.command-enum { min-width: 0; margin: 0; padding: .45rem .55rem .55rem; border: 1px solid #284967; border-radius: 7px; }
+.command-enum legend { padding: 0 .2rem; }
+.enum-options { display: flex; gap: .3rem; flex-wrap: wrap; }
+.enum-options button, .boolean-toggle { padding: .38rem .6rem; border: 1px solid #3b6282; border-radius: 6px; color: #bdd1e4; background: #0a1a2c; font: .68rem ui-monospace, monospace; }
+.enum-options button.selected, .enum-options button:hover, .boolean-toggle.active { border-color: #70d5a1; color: #061a15; background: #72d9a5; }
+.boolean-toggle { width: fit-content; min-width: 4.5rem; }
+.command-run { min-width: 4.5rem; padding: .45rem .75rem; border: 1px solid #4fbe83; border-radius: 6px; color: #061a15; background: #54ce91; font-weight: 900; }
+.command-run:hover:not(:disabled) { background: #7be4ad; }
+.command-run:disabled { cursor: wait; opacity: .55; }
+.command-feedback { margin: 0; padding: .45rem .55rem; border: 1px solid #36536d; border-radius: 6px; color: #b9ccdd; background: #08182a; font: .64rem/1.4 ui-monospace, monospace; }
+.command-feedback.pending { border-color: #936e2f; color: #ffe0a0; background: rgb(107 74 17 / .25); }
+.command-feedback.success { border-color: #31805b; color: #9de6c4; background: rgb(22 100 66 / .22); }
+.command-feedback.failure { border-color: #a54855; color: #ffb2b9; background: rgb(124 34 49 / .22); }
+
+.debugger-workspace { min-height: 100dvh; padding: .75rem; color: #edf6ff; }
+.debug-hero { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.debug-hero-actions { display: flex; align-items: center; justify-content: flex-end; gap: .55rem; flex-wrap: wrap; }
+.debugger-grid { display: grid; grid-template-columns: minmax(16rem, .65fr) minmax(24rem, 1.35fr); gap: .75rem; min-height: 34rem; }
+.debug-navigator, .debug-workbench { min-height: 0; padding: 1rem; }
+.debug-tree { display: grid; gap: .2rem; overflow: auto; }
+.debug-tree-item { display: flex; width: 100%; align-items: center; gap: .55rem; padding: .65rem .55rem; border: 1px solid transparent; border-radius: 8px; color: #d9edff; background: transparent; text-align: left; }
+.debug-tree-item:not(:disabled):hover, .debug-tree-item.selected { border-color: #4baeff; background: #143758; }
+.debug-tree-item.locked { color: #8c9daf; }
+.debug-tree-item small { display: block; margin-top: .15rem; color: #8da7bf; font-size: .65rem; text-transform: uppercase; }
+.debug-tree-icon { width: 1.25rem; color: #71c7ff; text-align: center; }
+.debug-disabled-reason { margin-top: -.05rem; margin-bottom: .35rem; color: #b89668; font-size: .68rem; line-height: 1.4; }
+.debug-online { color: #8be3b0; }
+.debug-warning { border-color: #957133; color: #ffe2a3; background: #3b2d15; }
+.debug-error { margin: .8rem 0; padding: .75rem .85rem; border: 1px solid #b34d5a; border-radius: 8px; color: #ffd9dd; background: #401d28; line-height: 1.45; }
+.debug-error strong { color: #ff9da8; }.debug-error code { margin-left: .45rem; color: #ffb6bd; font: .72rem ui-monospace, monospace; }
+.recording-modal-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 1rem; background: rgb(1 8 18 / .78); backdrop-filter: blur(4px); }
+.recording-modal { width: min(100%, 34rem); padding: 1.35rem; border-color: #4b7598; box-shadow: 0 24px 80px rgb(0 0 0 / .5); }
+.recording-modal h2 { margin-bottom: .7rem; color: #f1f8ff; font-size: 1.35rem; }.recording-modal p { color: #b9c9d9; line-height: 1.5; }.recording-session-id { display: block; margin: 1rem 0; padding: .65rem .75rem; overflow-wrap: anywhere; color: #9de6c4; background: #081728; border: 1px solid #294865; border-radius: 8px; font-size: .72rem; }.recording-modal-error { color: #ffb4bb !important; }.recording-modal-actions { display: flex; justify-content: flex-end; gap: .6rem; flex-wrap: wrap; margin-top: 1.1rem; }.recording-modal-actions button { min-width: 9rem; }
+.debug-tool-meta { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; color: #9eb4c8; font-size: .75rem; }
+.debug-tool-meta span { padding: .4rem .55rem; border: 1px solid #284767; border-radius: 6px; background: #091a2f; }
+.motor-control-card { max-width: 38rem; padding: 1rem; border: 1px solid #2d5170; border-radius: 12px; background: #0a1b2f; }
+.motor-control-card .panel-heading { margin-bottom: 1rem; }
+.motor-control-card output { color: #7dd4ff; font: 1.4rem ui-monospace, monospace; }
+.power-slider { width: 100%; accent-color: #4baeff; }
+.power-scale { display: flex; justify-content: space-between; margin: .35rem 0 1rem; color: #8da7bf; font: .7rem ui-monospace, monospace; }
+.hold-to-run, .full-width { width: 100%; margin-top: .55rem; }
+@media (max-width: 850px) { .debugger-grid { grid-template-columns: 1fr; } .debug-navigator { min-height: 18rem; } }
 @media (max-width: 660px) { .controller-replay { grid-template-columns: 1fr; }.replay-controls > div:first-child { align-items: flex-start; flex-direction: column; }.controller-body { gap: .1rem; }.left-controls, .right-controls { gap: .25rem; }.controller-stick { width: 3.65rem; height: 3.65rem; } }
-@media (max-width: 540px) { main { width: min(100% - 1rem, 1440px); padding-top: 1rem; }.connection-panel { grid-template-columns: 1fr; }.connection-panel button { width: 100%; }.panel-heading { flex-direction: column; } }
+@media (max-width: 540px) { main { width: calc(100% - 1rem); padding-top: 1rem; }.connection-panel { grid-template-columns: 1fr; }.connection-panel button { width: 100%; }.panel-heading { flex-direction: column; } }
+
+/* Match the official Driver Station's error focus while keeping it inside the
+   dashboard telemetry panel. */
+.telemetry.telemetry-opmode-error { display: flex; flex-direction: column; color: #20252b; border-color: #b6bcc3; background: #f0f1f2; }
+.telemetry-opmode-error .panel-heading { margin-bottom: .55rem; }.telemetry-opmode-error .panel-heading h2 { color: #171b20; }.telemetry-opmode-error .panel-heading .eyebrow, .telemetry-opmode-error .panel-heading > span { color: #c9202e; }.telemetry-opmode-error .panel-heading > span { padding: .18rem .4rem; border: 1px solid #dc5963; border-radius: 5px; font-size: .66rem; }
+.opmode-error-body { display: flex; flex: 1; flex-direction: column; min-height: 0; }.opmode-error-summary { margin: 0; color: #d11e2b; font-size: 1.05rem; font-weight: 850; }.opmode-error-hint { margin: .4rem 0 .75rem; color: #58616a; font-size: .8rem; line-height: 1.4; }.opmode-error-stack { flex: 1; min-height: 9rem; margin: 0; padding: .8rem; overflow: auto; border: 1px solid #00162b; border-radius: 3px; color: #f3f6fa; background: #001d35; font: .78rem/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre; overflow-wrap: normal; }

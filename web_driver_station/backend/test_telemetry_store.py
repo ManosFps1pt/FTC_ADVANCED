@@ -94,6 +94,27 @@ class TelemetryStoreTests(unittest.TestCase):
                 received_monotonic_ns=3,
             )
 
+    def test_latest_state_does_not_include_replay_history(self) -> None:
+        self.start_session()
+        self.store.ingest(
+            self.envelope(
+                "sample",
+                {
+                    "sampleSequence": "0",
+                    "schemaRevision": 1,
+                    "values": {"drive.left.currentA": 3.2, "debug.drive.state": "DRIVING"},
+                },
+            ),
+            received_monotonic_ns=3,
+        )
+
+        latest = self.store.latest_state()
+
+        self.assertIsNotNone(latest["snapshot"])
+        self.assertEqual("3.2", str(latest["snapshot"]["values"]["drive.left.currentA"]))
+        self.assertNotIn("snapshots", latest)
+        self.assertNotIn("gamepadFrames", latest)
+
     def test_disconnect_marks_matching_session_inactive(self) -> None:
         self.start_session()
 

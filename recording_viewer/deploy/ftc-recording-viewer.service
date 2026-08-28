@@ -1,0 +1,18 @@
+[Unit]
+Description=FTC Recording Viewer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/ftc-recording-viewer
+Environment=FTC_RECORDING_DIR=/srv/ftc-recordings
+ExecStart=/opt/ftc-recording-viewer/.venv/bin/uvicorn --factory recording_viewer.backend.main:create_configured_app --host 127.0.0.1 --port 8002
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

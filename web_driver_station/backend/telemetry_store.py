@@ -354,6 +354,11 @@ class TelemetryStore:
                         update = self._ingest_heartbeat(session, common)
                     elif message_type == "session_end":
                         update = self._ingest_session_end(session, common)
+                    elif message_type.startswith("debug_"):
+                        # Debugger control/state messages are handled by the
+                        # DebugSessionService. They still update the session's
+                        # liveness but are not telemetry samples.
+                        update = []
                     else:
                         raise TelemetryProtocolError(f"Unsupported robot message type {message_type}")
                 self._last_error = None
@@ -369,6 +374,34 @@ class TelemetryStore:
                 "activeSession": session.summary() if session else None,
                 "sessionCount": len(self._sessions),
                 "lastError": self._last_error,
+            }
+
+    def latest_state(self, *, event_limit: int = 10) -> dict[str, Any]:
+        """Return only the active session's latest state, never its history.
+
+        The dashboard intentionally has a history-oriented ``live_state``
+        method. Model-facing integrations need a bounded response so a status
+        request cannot accidentally place thousands of samples in context.
+        """
+
+        if event_limit <= 0:
+            raise ValueError("event_limit must be positive")
+        with self._lock:
+            session = self._current_session()
+            if session is None:
+                return {
+                    "status": self.status(),
+                    "session": None,
+                    "catalog": None,
+                    "snapshot": None,
+                    "recentEvents": [],
+                }
+            return {
+                "status": self.status(),
+                "session": session.summary(),
+                "catalog": session.catalog.to_wire() if session.catalog else None,
+                "snapshot": session.latest_snapshot.to_wire() if session.latest_snapshot else None,
+                "recentEvents": [event.to_wire() for event in list(session.events)[-event_limit:]],
             }
 
     def has_session(self, session_id: object) -> bool:
