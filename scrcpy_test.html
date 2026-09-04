@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="scrcpy-token" content="{{ token }}">
+<title>scrcpy test bench</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{font:14px/1.5 system-ui,sans-serif;margin:0;background:#101318;color:#e3e8f0}main{max-width:1100px;margin:32px auto;padding:0 20px}h1{font-size:26px;margin:0}h2{font-size:17px;margin:0 0 14px}p{margin:8px 0;color:#aeb9c9}.top,.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.top{justify-content:space-between;margin-bottom:22px}section{background:#191f29;border:1px solid #303947;border-radius:9px;padding:20px;margin:14px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}.field{display:flex;flex-direction:column;gap:4px}.check{display:flex;align-items:center;gap:8px;min-height:35px}input:not([type=checkbox]),select,textarea{width:100%;padding:8px;border:1px solid #414d60;border-radius:5px;font:inherit;background:#191f29;color:inherit}input[type=checkbox]{accent-color:#729fff}input::placeholder,textarea::placeholder{color:#8391a6}:focus-visible{outline:2px solid #8ab4ff;outline-offset:2px}button,.button{border:1px solid #414d60;background:#222c3a;color:#e3e8f0;border-radius:5px;padding:8px 13px;cursor:pointer;font:inherit;text-decoration:none}button:hover,.button:hover{background:#2a3545}button.primary{background:#315fba;border-color:#315fba;color:white}button.stop{background:#382125;color:#ffb4ae;border-color:#794047}button:disabled{opacity:.45;cursor:default}.muted,small{color:#a7b3c6;font-size:12px}.badge{font:12px ui-monospace,monospace;background:#273447;border-radius:20px;padding:6px 12px}.actions{margin-top:16px}details{margin-top:14px}summary{cursor:pointer;font-weight:600}details .grid{margin-top:14px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#18202d;color:#dbe7f5;padding:14px;border-radius:6px;max-height:250px;overflow:auto;font:12px/1.5 ui-monospace,monospace}#message{position:sticky;top:0;z-index:2;padding:10px 14px;border-radius:5px;background:#20334e;border:1px solid #42628e;white-space:pre-wrap}#message.error{background:#382125;border-color:#794047;color:#ffb4ae}[hidden]{display:none!important}.options{max-height:400px;overflow:auto;margin-top:12px;border-top:1px solid #303947}.option{padding:12px 0;border-bottom:1px solid #303947;display:grid;grid-template-columns:240px 1fr;gap:12px}.option code{overflow-wrap:anywhere}.option p{font-size:12px;margin:4px 0}.option label{display:flex;align-items:flex-start;gap:7px}.files{width:100%;border-collapse:collapse;margin-top:10px}.files td,.files th{text-align:left;padding:10px 5px;border-bottom:1px solid #303947}.files th{color:#a7b3c6;font-size:12px;font-weight:500}.files td:first-child{overflow-wrap:anywhere}video{width:100%;max-height:430px;background:#111;margin-top:14px;border-radius:6px}audio{width:100%;margin-top:14px}#native-command{max-height:95px}#device{min-width:240px;flex:1}.grow{flex:1}@media(max-width:600px){main{margin:18px auto;padding:0 12px}section{padding:15px}.option{grid-template-columns:1fr}.files td:last-child{min-width:155px}.top{gap:12px}}
+</style>
+</head>
+<body><main>
+<header class="top"><div><h1>scrcpy test bench</h1><p>Simple Android camera preview and recording.</p></div><div class="row"><span id="state" class="badge">Connecting…</span><button id="stop" class="stop" disabled>Stop preview</button></div></header>
+<div id="message" role="status" aria-live="polite" hidden></div>
+<section><h2>Device</h2><div class="row"><label for="device">Android phone</label><select id="device" aria-label="Android phone"><option value="">Automatic selection</option></select><button id="refresh">Refresh devices</button></div>
+</section>
+<section><h2>Camera capture</h2><p>The camera opens automatically in preview-only mode. Start recording begins saving; Stop recording returns to preview. Browser preview is silent, up to 10 FPS and 240 pixels; recording uses the selected FPS.</p>
+<form id="camera-form"><fieldset id="camera-controls" style="border:0;padding:0;margin:0"><div id="camera-basic" class="grid"></div></fieldset>
+<div class="row actions"><button id="record" class="primary start" type="submit" data-mode="record">Start recording</button><button class="start" type="submit" data-mode="preview">Start preview</button><button id="stop-recording" type="button" disabled>Stop recording</button></div></form>
+<div id="live-panel" hidden><div class="row actions"><strong>Live camera</strong><span id="live-state" class="badge">Waiting for frames</span></div><p id="live-note" class="muted"></p><img id="live-image" alt="Live camera preview" hidden style="display:block;width:100%;max-height:500px;object-fit:contain;background:#090c10;margin-top:12px;border-radius:6px"></div>
+</section>
+<section hidden><h2>Every scrcpy option</h2><p>Legacy native controls are intentionally hidden from the simple camera test page.</p>
+<div class="row" id="presets"><button data-preset="screen">Screen preview</button><button data-preset="virtual">Virtual display</button><button data-preset="audio">Microphone only</button><button data-preset="otg">OTG controls</button><button data-preset="version">Version check</button><button data-preset="clear">Clear options</button></div>
+<details id="all-options"><summary>Browse all options <span id="option-count" class="muted"></span></summary><label class="field actions">Find an option<input id="option-search" type="search" placeholder="Search zoom, codec, keyboard, window…"></label><div id="native-options" class="options"></div></details>
+<div class="grid actions"><label class="check"><input id="native-save" type="checkbox">Save native session to a file</label><label class="field">Native recording filename<input id="native-filename" placeholder="native-test.mp4"></label></div>
+<details><summary>Additional arguments</summary><p class="muted">One argument per line; for example --camera-zoom=1.5. Values can contain spaces. Do not add shell quotes.</p><textarea id="extra-args" rows="3" aria-label="Additional arguments" spellcheck="false"></textarea></details>
+<pre id="native-command" aria-label="Selected scrcpy arguments">Choose a preset or enable options.</pre><button id="run-native" class="primary start">Run selected options</button>
+<details><summary>Full help &amp; keyboard shortcuts</summary><pre id="full-help"></pre></details>
+</section>
+<section><div class="row"><h2 class="grow">Recordings</h2><button id="refresh-files">Refresh files</button></div><p class="muted">Recording saves automatically here. Stop first, then use Play or Download / Save as. Browser playback depends on the selected codec.</p><p id="save-directory" class="muted"></p><table class="files"><thead><tr><th>File</th><th>Size</th><th>Actions</th></tr></thead><tbody id="files"></tbody></table><video id="video" controls hidden></video><audio id="audio" controls hidden></audio><p id="player-note" class="muted" hidden></p></section>
+<section><h2>Session status &amp; logs</h2><p id="activity">No session running.</p><p id="last-recording" class="muted" hidden></p><pre id="logs">Waiting for scrcpy…</pre><details><summary>Raw status</summary><pre id="raw-status"></pre></details></section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const token = document.querySelector('meta[name="scrcpy-token"]').content;
+let cameraFields = [], nativeFields = [], latest = {running:false}, busy = false, filesSignature = '';
+function message(text, error=false) { $('message').hidden=!text; $('message').textContent=text; $('message').classList.toggle('error',error); }
+async function api(url, data) {
+  const response = await fetch(url, data === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json','X-Scrcpy-Token':token}, body:JSON.stringify(data)});
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || response.statusText);
+  return result;
+}
+function buttons() {
+  const preview=latest.running&&latest.session_kind==='preview';
+  document.querySelectorAll('.start').forEach(b=>b.disabled=busy||latest.running);
+  $('record').disabled=busy||(latest.running&&!preview);
+  const previewButton=document.querySelector('[data-mode="preview"]');
+  previewButton.disabled=busy||(latest.running&&!preview);
+  previewButton.textContent=preview?'Apply preview settings':'Start preview';
+  $('stop').disabled=busy||!latest.running||latest.session_kind==='record';
+  $('stop-recording').disabled=busy||!latest.running||latest.session_kind!=='record';
+}
+async function action(fn) { busy=true; buttons(); message('Working…'); try { await fn(); message('Done.'); } catch(e) { message(e.message,true); } finally { busy=false; buttons(); await poll(); } }
+function textElement(tag, text) { const el=document.createElement(tag); el.textContent=text; return el; }
+function human(name) { return name.replaceAll('_',' ').replace(/^./,c=>c.toUpperCase()); }
+const choices={facing:['back','front','external'],aspect_ratio:['','16:9','4:3','1:1']};
+function makeCameraField(field) {
+  const label=document.createElement('label'); label.className=field.type==='bool'?'check':'field';
+  let input;
+  if (choices[field.name]) { input=document.createElement('select'); for(const value of choices[field.name]) input.add(new Option(value||'Automatic',value)); }
+  else { input=document.createElement('input'); input.type=field.type==='bool'?'checkbox':/^(int|float)/.test(field.type)?'number':'text'; if(field.type.startsWith('float'))input.step='any'; }
+  const names={facing:'Lens',aspect_ratio:'Aspect ratio',fps:'Recording FPS',flip:'Flip video'};
+  input.id='camera-'+field.name; input.setAttribute('aria-label',names[field.name]||human(field.name));
+  if(field.type==='bool')input.checked=field.default; else input.value=field.default??'';
+  if(field.name==='fps')input.placeholder='60';
+  const name=names[field.name]||human(field.name);
+  label.append(field.type==='bool'?input:document.createTextNode(name),field.type==='bool'?document.createTextNode(name):input);
+  $('camera-basic').append(label);
+  field.input=input;
+}
+function cameraValues() { const values={}; if($('device').value)values.serial=$('device').value; for(const f of cameraFields) { if(f.type==='bool') values[f.name]=f.input.checked; else if(f.input.value!=='') values[f.name]=/^(int|float)/.test(f.type)?Number(f.input.value):f.input.value; } return values; }
+function nativeArguments(validate=false) {
+  const args=[];
+  for(const f of nativeFields) if(f.enabled.checked) { const value=f.input?.value||''; if(validate&&f.takes_value&&!f.optional_value&&!value)throw new Error('Enter a value for '+f.flag); args.push(f.takes_value&&value?f.flag+'='+value:f.flag); }
+  args.push(...$('extra-args').value.split('\n').map(x=>x.trim()).filter(Boolean));
+  if($('native-save').checked) { const name=$('native-filename').value||'native-'+Date.now()+'.mp4'; args.push('--record='+name); }
+  if($('device').value&&!args.some(a=>/^(--serial|--select-usb|--select-tcpip|--tcpip|--otg)(=|$)|^-[sde]/.test(a))) args.unshift('--serial='+$('device').value);
+  return args;
+}
+function updateCommand() { $('native-command').textContent=nativeArguments().join('\n')||'Choose a preset or enable options.'; }
+function makeNativeField(f) {
+  const row=document.createElement('div'); row.className='option';
+  const enabled=document.createElement('input'); enabled.type='checkbox'; enabled.setAttribute('aria-label','Enable '+f.flag); f.enabled=enabled;
+  const label=document.createElement('label'); label.append(enabled,textElement('code',f.heading));
+  const detail=document.createElement('div'); detail.append(textElement('p',f.description));
+  if(f.takes_value) { const input=document.createElement('input'); input.placeholder=f.optional_value?'Optional value':'Value'; input.setAttribute('aria-label','Value for '+f.flag); input.addEventListener('input',()=>{enabled.checked=true;updateCommand();}); f.input=input; detail.append(input); }
+  enabled.addEventListener('change',updateCommand); row.append(label,detail); $('native-options').append(row); f.row=row;
+}
+function preset(name) {
+  const presets={screen:{'--video-source':'display'},virtual:{'--new-display':'1920x1080'},audio:{'--no-video':true,'--audio-source':'mic'},otg:{'--otg':true},version:{'--version':true},clear:{}};
+  for(const f of nativeFields) { const value=presets[name][f.flag]; f.enabled.checked=value!==undefined; if(f.input)f.input.value=typeof value==='string'?value:''; }
+  $('extra-args').value=''; $('native-save').checked=name==='audio'; if(name==='audio')$('native-filename').value='microphone-'+Date.now()+'.opus'; updateCommand();
+}
+async function refreshDevices() { const {devices}=await api('/api/devices'); const old=$('device').value; $('device').replaceChildren(new Option('Automatic selection','')); for(const d of devices){const option=new Option((d.model||d.serial)+' · '+d.serial+' · '+d.state,d.serial); option.disabled=d.state!=='device'; $('device').add(option);} if(devices.some(d=>d.serial===old))$('device').value=old; else if(devices.filter(d=>d.state==='device').length===1)$('device').value=devices.find(d=>d.state==='device').serial; updateCommand(); }
+function play(name) { $('video').pause(); $('audio').pause(); $('video').hidden=true; $('audio').hidden=true; const player=/\.(mp4|mkv)$/i.test(name)?$('video'):$('audio'); player.src='/api/recordings/'+encodeURIComponent(name); player.hidden=false; $('player-note').hidden=false; $('player-note').textContent='Playing '+name; player.play().catch(()=>{$('player-note').textContent='If this format is unsupported by your browser, download it and open it in a media player.';}); }
+async function refreshFiles() { const {files}=await api('/api/recordings'); const signature=JSON.stringify(files); if(signature===filesSignature)return; filesSignature=signature; $('files').replaceChildren(); if(!files.length){const row=document.createElement('tr'); const cell=textElement('td','No test recordings yet.');cell.colSpan=3;row.append(cell);$('files').append(row);} for(const file of files){const row=document.createElement('tr');const controls=document.createElement('td');const playButton=textElement('button','Play');playButton.disabled=file.active||!file.bytes;playButton.onclick=()=>play(file.name);controls.append(playButton); if(file.active)controls.append(textElement('small',' Recording…')); else {const link=textElement('a','Download / Save as');link.className='button';link.href='/api/recordings/'+encodeURIComponent(file.name)+'?download=1';link.download=file.name;controls.append(' ',link);}row.append(textElement('td',file.name),textElement('td',(file.bytes/1048576).toFixed(2)+' MB'),controls);$('files').append(row);} }
+let previewTimer=null, previewBusy=false, previewUrl=null, previewSession=null;
+function updateLive() {
+  const info=latest.browser_preview||{};
+  $('live-panel').hidden=!info.enabled;
+  if(previewSession!==latest.started_monotonic_ns)previewSession=latest.started_monotonic_ns;
+  $('live-state').textContent=info.error?'Preview unavailable':!latest.running?'Stopped':info.live?'LIVE':info.sequence?'Waiting for fresh frames':'Waiting for frames';
+  $('live-note').textContent=info.error||(!latest.running?'Session ended. The image is the last received frame.':info.sequence&&!info.live?'The preview has not received a fresh frame recently.':'Silent preview · recording retains the selected camera settings.');
+  if(info.enabled&&latest.running&&!info.error&&!previewTimer)previewTimer=setInterval(loadLiveFrame,100);
+  if((!info.enabled||!latest.running||info.error)&&previewTimer){clearInterval(previewTimer);previewTimer=null;}
+}
+async function loadLiveFrame(){
+  if(previewBusy||document.hidden)return;previewBusy=true;
+  const session=previewSession;
+  try{const response=await fetch('/api/preview/frame');if(response.status===204)return;if(!response.ok)throw new Error('Preview request failed');const blob=await response.blob();if(session!==previewSession)return;const url=URL.createObjectURL(blob);$('live-image').src=url;$('live-image').hidden=false;if(previewUrl)URL.revokeObjectURL(previewUrl);previewUrl=url;}catch(e){$('live-note').textContent=e.message;}finally{previewBusy=false;}
+}
+let polling=false;
+async function poll() { if(polling)return;polling=true;try{latest=await api('/api/status');$('state').textContent=latest.running&&latest.session_kind==='preview'?'PREVIEW ONLY':latest.running&&latest.session_kind==='record'?'RECORDING':latest.state;$('activity').textContent=(latest.web_output?'File: '+latest.web_output+' · ':'')+(latest.last_reported_fps!==null?latest.last_reported_fps+' FPS · ':'')+(latest.running?'Session running. ':'Session ended. ')+(latest.startup_error||latest.error||'')+(latest.session_kind==='preview'?' No file is being saved.':'');$('logs').textContent=latest.logs.join('\n')||'Waiting for scrcpy…';$('raw-status').textContent=JSON.stringify(latest,null,2);buttons();updateLive();const last=latest.last_recording;$('last-recording').hidden=!last;$('last-recording').textContent=last?'Last recording: '+(last.output||'')+' · '+last.state+(last.error?' · '+last.error:''):'';await refreshFiles();}catch(e){$('state').textContent='Offline';message(e.message,true);}finally{polling=false;} }
+$('camera-form').addEventListener('submit',event=>{event.preventDefault(); const mode=event.submitter.dataset.mode;action(async()=>{await api('/api/camera',{mode,options:cameraValues(),preview:false,browser_preview:true});});});
+$('stop').onclick=()=>action(()=>api('/api/stop',{}));
+$('stop-recording').onclick=()=>action(()=>api('/api/recording/stop',{}));
+$('refresh').onclick=()=>action(refreshDevices); $('refresh-files').onclick=()=>action(refreshFiles);
+$('presets').onclick=event=>{if(event.target.dataset.preset)preset(event.target.dataset.preset);};
+$('option-search').oninput=()=>{const query=$('option-search').value.toLowerCase();for(const f of nativeFields)f.row.hidden=!(f.heading+' '+f.description).toLowerCase().includes(query);};
+for(const id of ['device','native-save','native-filename','extra-args'])$(id).addEventListener('input',updateCommand);
+$('run-native').onclick=()=>action(()=>api('/api/native',{args:nativeArguments(true)}));
+async function init() { try{const data=await api('/api/features');cameraFields=data.camera;cameraFields.forEach(makeCameraField);nativeFields=data.native;nativeFields.forEach(makeNativeField);$('option-count').textContent='('+nativeFields.length+')';$('full-help').textContent=data.help;$('save-directory').textContent=data.recordings_directory;await refreshDevices();await poll();}catch(e){message(e.message,true);}setInterval(poll,1000); }
+init();
+</script>
+</body></html>

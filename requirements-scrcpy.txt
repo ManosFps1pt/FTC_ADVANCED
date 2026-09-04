@@ -1,0 +1,6 @@
+# Local scrcpy test website. scrcpy itself is installed separately with WinGet.
+Flask>=3.1,<4
+
+# Decode only the browser preview; scrcpy records the original packets.
+av>=17,<18
+Pillow>=11,<13

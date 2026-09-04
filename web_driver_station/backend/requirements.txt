@@ -6,3 +6,6 @@ protobuf>=5.26.1,<6
 opencv-python>=4.10,<6
 # SFTP upload of finalized recordings using the existing SSH key.
 paramiko>=3.5,<4
+# Direct scrcpy camera preview decoding (scrcpy executable is installed separately).
+av>=17,<18
+Pillow>=11,<13

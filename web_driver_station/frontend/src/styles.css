@@ -144,3 +144,46 @@ label { display: grid; gap: .35rem; font-size: .8rem; font-weight: 700; color: #
 .telemetry.telemetry-opmode-error { display: flex; flex-direction: column; color: #20252b; border-color: #b6bcc3; background: #f0f1f2; }
 .telemetry-opmode-error .panel-heading { margin-bottom: .55rem; }.telemetry-opmode-error .panel-heading h2 { color: #171b20; }.telemetry-opmode-error .panel-heading .eyebrow, .telemetry-opmode-error .panel-heading > span { color: #c9202e; }.telemetry-opmode-error .panel-heading > span { padding: .18rem .4rem; border: 1px solid #dc5963; border-radius: 5px; font-size: .66rem; }
 .opmode-error-body { display: flex; flex: 1; flex-direction: column; min-height: 0; }.opmode-error-summary { margin: 0; color: #d11e2b; font-size: 1.05rem; font-weight: 850; }.opmode-error-hint { margin: .4rem 0 .75rem; color: #58616a; font-size: .8rem; line-height: 1.4; }.opmode-error-stack { flex: 1; min-height: 9rem; margin: 0; padding: .8rem; overflow: auto; border: 1px solid #00162b; border-radius: 3px; color: #f3f6fa; background: #001d35; font: .78rem/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre; overflow-wrap: normal; }
+
+/* Serial-bound native Android camera discovery and recording status. */
+.topbar-camera { display: inline-flex; align-items: center; gap: .32rem; padding: .42rem .55rem; border: 1px solid #314a67; border-radius: 8px; color: #aebfd0; background: rgb(5 16 30 / .38); font-size: .7rem; font-weight: 800; white-space: nowrap; }
+.topbar-camera.active { border-color: #39b779; color: #bdf1d4; background: rgb(15 92 63 / .3); }
+.topbar-camera.recording { border-color: #e15360; color: #ffd8dc; background: rgb(126 29 43 / .45); }
+.topbar-camera.recording .driver-dot { background: #ff5968; box-shadow: 0 0 12px #ff5968; }
+.adb-camera-panel { grid-column: 1 / -1; padding: .7rem .85rem; }
+.adb-camera-panel .panel-heading { margin-bottom: .55rem; }
+.camera-preflight { margin: -.25rem 0 .55rem; color: #b9a978; font-size: .66rem; line-height: 1.4; }
+.camera-mode-controls { display: flex; align-items: end; gap: .65rem 1rem; flex-wrap: wrap; margin: -.2rem 0 .65rem; }
+.camera-mode-controls label, .direct-camera-settings label { display: grid; gap: .22rem; color: #aebfd0; font-size: .62rem; font-weight: 800; text-transform: uppercase; }
+.camera-mode-controls select, .direct-camera-settings select, .direct-camera-settings input[type="number"] { min-height: 2rem; padding: .3rem .45rem; border: 1px solid #355b7b; border-radius: 6px; color: #dcecff; background: #091a2f; font: inherit; text-transform: none; }
+.camera-mode-controls small { max-width: 38rem; padding-bottom: .22rem; color: #9fb1c3; font-size: .65rem; line-height: 1.35; }
+.direct-camera-settings { display: flex; align-items: end; gap: .55rem; flex-wrap: wrap; margin: .2rem 0 .7rem; padding: .6rem .7rem; border: 1px solid #294865; border-radius: 8px; background: #081728; }
+.direct-camera-settings .camera-flip { display: flex; align-items: center; gap: .4rem; min-height: 2rem; text-transform: none; }
+.direct-camera-settings button { min-height: 2rem; padding: .35rem .55rem; font-size: .65rem; }
+.direct-camera-preview { margin: .65rem 0; overflow: hidden; border: 1px solid #315a78; border-radius: 9px; background: #030a11; }
+.direct-camera-preview .panel-heading { padding: .45rem .6rem; margin: 0; border-bottom: 1px solid #294865; background: #081728; }.direct-camera-preview .panel-heading h3 { font-size: .88rem; }.direct-camera-preview .panel-heading span { color: #92e5bd; font-size: .6rem; font-weight: 850; }.direct-camera-preview img { display: block; width: min(100%, 240px); min-height: 8rem; object-fit: contain; image-rendering: auto; }.direct-camera-preview .empty-state { min-height: 8rem; margin: 0; padding: .8rem; }
+.direct-preview-actions { justify-content: flex-end; margin-top: -.1rem; }
+.camera-upload-status { display: grid; grid-template-columns: auto 1fr; gap: .18rem .55rem; margin: .55rem 0; padding: .5rem .6rem; border: 1px solid #36536b; border-radius: 7px; color: #b9c9d9; background: #081728; font-size: .65rem; }.camera-upload-status strong { color: #d8ebf8; text-transform: uppercase; }.camera-upload-status span { overflow: hidden; color: #9de6c4; font-family: ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }.camera-upload-status small { grid-column: 1 / -1; color: #9fb1c3; }.camera-upload-status.upload-uploading { border-color: #4186c2; }.camera-upload-status.upload-waiting_for_video { border-color: #a88a3e; }.camera-upload-status.upload-error { border-color: #b34d5a; }.camera-upload-status.upload-error strong { color: #ffabb3; }.upload-progress { position: relative; grid-column: 1 / -1; height: 1.2rem; overflow: hidden; border: 1px solid #3676ab; border-radius: 5px; background: #04101d; }.upload-progress-fill { height: 100%; background: linear-gradient(90deg, #2875b5, #56b8ee); transition: width .2s ease-out; }.upload-progress span { position: absolute; inset: 0; display: grid; place-items: center; overflow: visible; color: #eff9ff; font-size: .58rem; font-weight: 800; text-shadow: 0 1px 2px #00101d; }
+.adb-device-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: .55rem; }
+.adb-device-card { min-width: 0; padding: .6rem .7rem; border: 1px solid #294865; border-radius: 9px; background: #091a2f; }
+.adb-device-card.role-camera { border-color: #2f9768; background: rgb(15 92 63 / .2); }
+.adb-device-card.role-robot_controller { border-color: #4578a4; }
+.adb-device-heading { display: flex; justify-content: space-between; gap: .7rem; }
+.adb-device-heading strong, .adb-device-heading small { display: block; }
+.adb-device-heading small { margin-top: .12rem; color: #8fa5ba; font-size: .62rem; }
+.adb-device-heading > span { color: #8dd8ff; font-size: .62rem; font-weight: 850; text-transform: uppercase; }
+.adb-device-card > p { margin: .4rem 0; color: #afc0d1; font-size: .68rem; }
+.adb-evidence, .camera-runtime-meta { display: flex; gap: .3rem; flex-wrap: wrap; }
+.adb-evidence span, .camera-runtime-meta span { padding: .18rem .32rem; border: 1px solid #35536d; border-radius: 5px; color: #aebfd0; font-size: .58rem; }
+.adb-evidence span.warning { border-color: #a46b2c; color: #ffd18b; }
+.adb-evidence span.suggested { border-color: #2f9768; color: #9de6c4; }
+.adb-role-actions { display: flex; gap: .3rem; flex-wrap: wrap; margin-top: .5rem; }
+.adb-role-actions button { padding: .35rem .5rem; border: 1px solid #355b7b; border-radius: 6px; font-size: .62rem; }
+.adb-role-actions button.selected { border-color: #62d49a; color: #071a13; background: #62d49a; }
+.camera-runtime { display: grid; grid-template-columns: minmax(14rem, 1fr) auto auto; align-items: center; gap: .7rem; margin-top: .55rem; padding-top: .55rem; border-top: 1px solid #294865; }
+.camera-runtime strong, .camera-runtime small { display: block; }
+.camera-runtime small { margin-top: .12rem; color: #9fb1c3; font-size: .65rem; }
+.camera-runtime-actions { display: flex; gap: .4rem; }
+.camera-runtime-actions button { padding: .42rem .6rem; font-size: .65rem; }
+.camera-error { margin: .35rem 0; color: #ff9ca6 !important; font-size: .7rem; }
+@media (max-width: 760px) { .camera-runtime { grid-template-columns: 1fr; align-items: stretch; } .camera-mode-controls, .direct-camera-settings { align-items: stretch; } }

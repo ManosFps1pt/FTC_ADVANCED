@@ -99,6 +99,24 @@ badge also shows a sampled ICMP network ping to the RC every two seconds; a
 dash means ICMP is unavailable or blocked even though the Robocol link may
 still be healthy.
 
+## Dashboard camera capture
+
+The Camera capture panel uses the Android phone assigned the **camera** ADB
+role. **Direct scrcpy** is the default: it starts a small 240-pixel, 10-FPS
+idle preview when the dashboard starts, records at the configured FPS
+(60 by default) from OpMode Init through Stop, and resumes the preview after
+the MP4 finalizes. Its only camera controls are lens, aspect ratio, recording
+FPS, and flip. The preview can be stopped without changing the saved mode.
+
+**ADB Volume Up** remains available for phones whose OEM Camera app is the
+preferred recorder. It has no live preview, so it never competes with the
+native camera. Configure the phone's native camera settings before Init.
+
+Both modes require an authorized Android 12+ camera phone and the direct mode
+also requires `scrcpy` on `PATH` (or configured through `SCRCPY`). Errors are
+shown in the Camera capture panel without preventing the rest of the dashboard
+from running.
+
 ## Durable `.ftclog` telemetry recordings
 
 Every valid protobuf frame accepted from the independent robot-data TCP stream
@@ -113,6 +131,16 @@ laptop monotonic receipt timestamp, frame length, and CRC32 per record. An
 unexpected crash leaves a `.ftclog.partial` file whose complete records can be
 read safely up to its incomplete tail. Set `ROBOT_DATA_RECORDINGS_DIR` to put
 recordings somewhere other than the default directory.
+
+Camera capture starts before the telemetry protocol supplies its UUID, so it
+uses a private staging folder briefly. The first raw telemetry packet binds the
+video to `recordings/<telemetry-session-uuid>/video/`; the raw log, video,
+manifest, and frame maps are then uploaded together automatically once both
+are finalized. Completed uploads keep the local session until the dashboard
+operator explicitly deletes it. Failed uploads keep the local artifacts and
+offer Retry. If no telemetry session arrives, the staged video is preserved and
+the camera panel reports the recovery path instead of uploading an unpaired
+clip.
 
 Use `GET /api/data/recordings` to list saved sessions, and download a finalized
 file with `GET /api/data/recordings/{session-id}/stream-00000.ftclog`.
@@ -141,8 +169,9 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/video/stop
 ```
 
 Recordings are written under `web_driver_station/recordings/<session-uuid>/`
-by default, or under `ROBOT_VIDEO_RECORDINGS_DIR` if set. Completed segments
-are available at `/api/video/sessions/{session-id}/segments/segment-00000.mp4`;
+by default, or under `ROBOT_DATA_RECORDINGS_DIR` if set so telemetry and
+camera artifacts retain one shared session root. Completed segments are
+available at `/api/video/sessions/{session-id}/segments/segment-00000.mp4`;
 the session list and recorder state are available at `/api/video/sessions` and
 `/api/video/status`. Camera auto-exposure and USB buffering mean the frame
 timestamp is not yet an exposure timestamp; the upcoming LED-marker layer will

@@ -20,9 +20,90 @@ type RobotDataStatus = {
   connection_count: number;
   peers: { host: string; port: number }[];
   recording: {
-    uploads: Record<string, { state: string; detail?: string; uploadedFiles?: number; skippedFiles?: number }>;
+    uploads: Record<string, {
+      state: string;
+      detail?: string;
+      uploadedFiles?: number;
+      skippedFiles?: number;
+      totalBytes?: number;
+      uploadedBytes?: number;
+      currentFile?: string | null;
+    }>;
   };
 };
+
+type AdbDeviceRole = "auto" | "robot_controller" | "camera" | "ignored";
+
+type AdbDeviceStatus = {
+  serial: string;
+  serial_suffix: string;
+  adb_state: string;
+  model: string;
+  manufacturer: string | null;
+  android_version: string | null;
+  camera_capable: boolean;
+  camera_package: string | null;
+  rc_installed: boolean;
+  rc_active: boolean;
+  is_control_hub: boolean;
+  preferred_role: AdbDeviceRole;
+  effective_role: string;
+  suggested_role: string | null;
+  role_reason: string;
+};
+
+type NativeCameraStatus = {
+  state: string;
+  recording: boolean;
+  confirmed: boolean;
+  session_id: string | null;
+  device_serial: string | null;
+  device_model: string | null;
+  detail: string;
+  duration_ms: number | null;
+  width: number | null;
+  height: number | null;
+  bytes: number | null;
+  local_path: string | null;
+  phone_path: string | null;
+  phone_copy_pending: boolean;
+  phone_copy_deleted: boolean;
+  transfer_progress: number | null;
+  battery_percent: number | null;
+  free_storage_bytes: number | null;
+  error: string | null;
+};
+
+type AdbCameraStatus = {
+  adb_available: boolean;
+  adb_error: string | null;
+  devices: AdbDeviceStatus[];
+  selected_camera_serial: string | null;
+  camera: NativeCameraStatus;
+};
+
+type CaptureMode = "scrcpy_direct" | "adb_volume_up";
+
+type DirectCaptureSettings = {
+  facing: "front" | "back" | "external" | null;
+  aspect_ratio: string | null;
+  fps: number;
+  flip: boolean;
+};
+
+type CameraCaptureStatus = {
+  config: {
+    mode: CaptureMode;
+    direct: DirectCaptureSettings;
+  };
+  recording: boolean;
+  capture_id: string | null;
+  telemetry_session_id: string | null;
+  preview: { enabled: boolean; running: boolean; detail: string | null };
+  error: string | null;
+};
+
+type DashboardCameraStatus = { capture: CameraCaptureStatus; adb: AdbCameraStatus };
 
 type Telemetry = {
   timestamp_ms: number;
@@ -77,6 +158,68 @@ const neutralGamepad = (): GamepadState => ({
 });
 
 const DEAD_ZONE = 0.08;
+
+const emptyAdbCameraStatus = (): AdbCameraStatus => ({
+  adb_available: true,
+  adb_error: null,
+  devices: [],
+  selected_camera_serial: null,
+  camera: {
+    state: "IDLE",
+    recording: false,
+    confirmed: false,
+    session_id: null,
+    device_serial: null,
+    device_model: null,
+    detail: "Discovering Android devices",
+    duration_ms: null,
+    width: null,
+    height: null,
+    bytes: null,
+    local_path: null,
+    phone_path: null,
+    phone_copy_pending: false,
+    phone_copy_deleted: false,
+    transfer_progress: null,
+    battery_percent: null,
+    free_storage_bytes: null,
+    error: null,
+  },
+});
+
+const emptyCaptureStatus = (): CameraCaptureStatus => ({
+  config: { mode: "scrcpy_direct", direct: { facing: "back", aspect_ratio: null, fps: 60, flip: false } },
+  recording: false,
+  capture_id: null,
+  telemetry_session_id: null,
+  preview: { enabled: false, running: false, detail: null },
+  error: null,
+});
+
+function cameraStateLabel(state: string): string {
+  const labels: Record<string, string> = {
+    IDLE: "Idle",
+    NO_CAMERA: "Not selected",
+    READY: "Ready",
+    STARTING: "Starting",
+    RECORDING_UNVERIFIED: "Recording",
+    RECORDING: "Recording",
+    STOPPING: "Stopping",
+    FINALIZING: "Finalizing",
+    IMPORTING: "Copying",
+    LAPTOP_VERIFIED: "Verified",
+    VERIFIED: "Verified",
+    ERROR: "Error",
+  };
+  return labels[state] ?? state.replaceAll("_", " ").toLowerCase();
+}
+
+function bytesLabel(value: number | null): string {
+  if (value === null) return "—";
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  return `${Math.round(value / 1024)} KB`;
+}
 
 function clampAxis(value: number | undefined): number {
   const safeValue = Math.max(-1, Math.min(1, value ?? 0));
@@ -225,36 +368,73 @@ function Axis({
   );
 }
 
-function RecordingDecisionModal({
+function RecordingUploadModal({
   sessionId,
   uploadState,
   busy,
-  onUpload,
-  onDelete,
+  onUploadOnly,
+  onUploadAndKeepLocal,
+  onDiscard,
 }: {
   sessionId: string;
   uploadState: { state: string; detail?: string };
   busy: boolean;
-  onUpload: (keepLocal?: boolean) => void;
-  onDelete: () => void;
+  onUploadOnly: () => void;
+  onUploadAndKeepLocal: () => void;
+  onDiscard: () => void;
 }) {
   const failed = uploadState.state === "error";
   return (
     <div className="recording-modal-backdrop" role="presentation">
       <section className="recording-modal panel" role="dialog" aria-modal="true" aria-labelledby="recording-modal-title">
-        <p className="eyebrow">Recording ready</p>
-        <h2 id="recording-modal-title">{failed ? "Upload failed" : "What should we do with this recording?"}</h2>
-        <p>{failed ? uploadState.detail : "The OpMode ended and the backend finalized a recording. Uploading will keep the server copy and remove the laptop copy by default."}</p>
+        <p className="eyebrow">Telemetry recording</p>
+        <h2 id="recording-modal-title">{failed ? "Recording needs attention" : "Recording ready"}</h2>
+        <p>{failed ? uploadState.detail : "Choose what to do before this telemetry and video recording is uploaded."}</p>
         <code className="recording-session-id">{sessionId}</code>
-        {failed && <p className="recording-modal-error">The local recording is still available. You can retry the upload or discard both copies.</p>}
+        {failed && <p className="recording-modal-error">The local telemetry and video remain intact. You can retry the upload or discard the recording.</p>}
         <div className="recording-modal-actions">
-          <button className="primary" type="button" disabled={busy} onClick={() => onUpload(false)}>{failed ? "Retry · remove laptop copy" : "Upload · remove laptop copy"}</button>
-          <button className="secondary" type="button" disabled={busy} onClick={() => onUpload(true)}>{failed ? "Retry · keep laptop copy" : "Upload · keep laptop copy"}</button>
-          <button className="danger" type="button" disabled={busy} onClick={onDelete}>Discard both copies</button>
+          <button className="primary" type="button" disabled={busy} onClick={onUploadOnly}>{failed ? "Retry upload only" : "Upload only"}</button>
+          <button className="secondary" type="button" disabled={busy} onClick={onUploadAndKeepLocal}>{failed ? "Retry and keep laptop copy" : "Upload and keep laptop copy"}</button>
+          <button className="danger" type="button" disabled={busy} onClick={onDiscard}>Discard recording</button>
         </div>
       </section>
     </div>
   );
+}
+
+function DirectCameraPreview({ active, detail }: { active: boolean; detail: string | null }) {
+  const [source, setSource] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!active) {
+      setSource(null);
+      return;
+    }
+    let disposed = false;
+    let current: string | null = null;
+    const load = async () => {
+      try {
+        const response = await fetch("/api/camera/preview/frame", { cache: "no-store" });
+        if (response.status === 204 || !response.ok) return;
+        const next = URL.createObjectURL(await response.blob());
+        if (disposed) { URL.revokeObjectURL(next); return; }
+        if (current) URL.revokeObjectURL(current);
+        current = next;
+        setSource(next);
+      } catch {
+        // Camera status carries the actionable error; transient polling errors
+        // should not erase the last useful preview frame.
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 100);
+    return () => { disposed = true; window.clearInterval(timer); if (current) URL.revokeObjectURL(current); };
+  }, [active]);
+
+  return <div className="direct-camera-preview">
+    <div className="panel-heading"><div><p className="eyebrow">Direct scrcpy</p><h3>Live camera</h3></div><span>{active ? "LIVE" : "WAITING"}</span></div>
+    {source ? <img src={source} alt="Live Android camera preview" /> : <p className="empty-state">{detail ?? "Waiting for camera frames."}</p>}
+  </div>;
 }
 
 function DriverStationPage({ page }: { page: "driver" | "configuration" | "telemetry" | "debug" }) {
@@ -276,6 +456,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
   const [notice, setNotice] = useState("Connect to a controlled test Robot Controller.");
   const [busy, setBusy] = useState(false);
   const [recordingBusy, setRecordingBusy] = useState(false);
+  const [adbBusy, setAdbBusy] = useState(false);
   const [pingMs, setPingMs] = useState<number | null>(null);
   const [robotData, setRobotData] = useState<RobotDataStatus>({
     listening: false,
@@ -284,13 +465,19 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     peers: [],
     recording: { uploads: {} },
   });
+  const [adbCamera, setAdbCamera] = useState<AdbCameraStatus>(emptyAdbCameraStatus);
+  const [captureCamera, setCaptureCamera] = useState<CameraCaptureStatus>(emptyCaptureStatus);
+  const [directDraft, setDirectDraft] = useState<DirectCaptureSettings>(emptyCaptureStatus().config.direct);
   const assignmentsRef = useRef<DriverAssignments>({ 1: null, 2: null });
   const shortcutKeysRef = useRef<Set<string>>(new Set());
   const lastPhysicalStatesRef = useRef<Record<1 | 2, GamepadState | null>>({ 1: null, 2: null });
+  const directDraftDirtyRef = useRef(false);
 
   const connected = status.connected;
   const physicalMode = physicalControllers.length > 0;
-  const pendingRecording = Object.entries(robotData.recording?.uploads ?? {}).find(([, upload]) => upload.state === "pending_confirmation" || upload.state === "error");
+  const recordingUploads = Object.entries(robotData.recording?.uploads ?? {}).filter(([sessionId]) => sessionId !== "configuration");
+  const pendingRecording = recordingUploads.find(([, upload]) => upload.state === "ready_to_upload" || upload.state === "error");
+  const latestUpload = recordingUploads.length ? recordingUploads[recordingUploads.length - 1] : null;
 
   const updateAssignments = useCallback((next: DriverAssignments) => {
     assignmentsRef.current = next;
@@ -342,6 +529,23 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     const timer = window.setInterval(() => void refreshStatus(), 1000);
     return () => window.clearInterval(timer);
   }, [refreshStatus]);
+
+  const refreshAdbCamera = useCallback(async () => {
+    try {
+      const next = await api<DashboardCameraStatus>("/camera/status");
+      setAdbCamera(next.adb);
+      setCaptureCamera(next.capture);
+      if (!directDraftDirtyRef.current) setDirectDraft(next.capture.config.direct);
+    } catch {
+      // Keep the last useful device state during a backend restart.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshAdbCamera();
+    const timer = window.setInterval(() => void refreshAdbCamera(), 1000);
+    return () => window.clearInterval(timer);
+  }, [refreshAdbCamera]);
 
   useEffect(() => {
     if (!connected) {
@@ -535,21 +739,102 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     }
   };
 
-  const recordingAction = async (action: "upload" | "delete", keepLocal = false) => {
+  const recordingAction = async (action: "upload_only" | "upload_keep_local" | "discard") => {
     if (!pendingRecording) return;
     const [sessionId] = pendingRecording;
-    if (action === "delete" && !window.confirm("Delete this finalized recording from the laptop? This cannot be undone.")) return;
+    if (action === "discard" && !window.confirm("Discard this telemetry and video recording from the laptop? It will not be uploaded and cannot be recovered.")) return;
     setRecordingBusy(true);
     try {
-      await api(`/data/recordings/${encodeURIComponent(sessionId)}${action === "upload" ? "/upload" : ""}`, {
-        method: action === "upload" ? "POST" : "DELETE",
-        ...(action === "upload" ? { body: JSON.stringify({ keep_local: keepLocal }) } : {}),
+      await api(`/data/recordings/${encodeURIComponent(sessionId)}${action === "discard" ? "/discard" : "/upload"}`, {
+        method: action === "discard" ? "DELETE" : "POST",
+        ...(action === "discard" ? {} : { body: JSON.stringify({ keep_local: action === "upload_keep_local" }) }),
       });
-      setNotice(action === "upload" ? (keepLocal ? "Recording upload started; laptop copy will be kept." : "Recording upload started; laptop copy will be removed after success.") : "Recording discarded from the laptop and server.");
+      setNotice(action === "discard" ? "Recording discarded from this laptop." : action === "upload_keep_local" ? "Recording upload started; the laptop copy will be kept." : "Recording upload started; the laptop copy will be removed after a successful upload.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Recording action failed");
     } finally {
       setRecordingBusy(false);
+    }
+  };
+
+  const assignAdbRole = async (serial: string, role: AdbDeviceRole) => {
+    setAdbBusy(true);
+    try {
+      const next = await api<AdbCameraStatus>(`/adb-camera/devices/${encodeURIComponent(serial)}/role`, {
+        method: "PUT",
+        body: JSON.stringify({ role }),
+      });
+      setAdbCamera(next);
+      const device = next.devices.find((item) => item.serial === serial);
+      setNotice(`${device?.model ?? serial} role set to ${role.replace("_", " ")}.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not assign Android device role");
+    } finally {
+      setAdbBusy(false);
+      void refreshAdbCamera();
+    }
+  };
+
+  const saveCaptureConfig = async (mode = captureCamera.config.mode, direct = directDraft) => {
+    setAdbBusy(true);
+    try {
+      const next = await api<DashboardCameraStatus>("/camera/config", {
+        method: "PUT",
+        body: JSON.stringify({ mode, direct }),
+      });
+      setCaptureCamera(next.capture);
+      setAdbCamera(next.adb);
+      directDraftDirtyRef.current = false;
+      setDirectDraft(next.capture.config.direct);
+      setNotice(mode === "scrcpy_direct" ? "Direct scrcpy camera selected." : "ADB Volume Up camera selected.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not update camera settings");
+      void refreshAdbCamera();
+    } finally {
+      setAdbBusy(false);
+    }
+  };
+
+  const editDirectCapture = (update: Partial<DirectCaptureSettings>) => {
+    directDraftDirtyRef.current = true;
+    setDirectDraft((previous) => ({ ...previous, ...update }));
+  };
+
+  const stopDirectPreview = async () => {
+    setAdbBusy(true);
+    try {
+      const next = await api<{ capture: CameraCaptureStatus }>("/camera/preview/stop", { method: "POST" });
+      setCaptureCamera(next.capture);
+      setNotice("Direct camera preview stopped.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not stop the camera preview");
+    } finally {
+      setAdbBusy(false);
+    }
+  };
+
+  const stopNativeCamera = async () => {
+    setAdbBusy(true);
+    try {
+      setAdbCamera(await api<AdbCameraStatus>("/adb-camera/stop", { method: "POST" }));
+      setNotice("Native camera stop requested; finalization and transfer continue in the background.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not stop the native camera");
+    } finally {
+      setAdbBusy(false);
+    }
+  };
+
+  const deletePhoneCopy = async () => {
+    if (!window.confirm("Delete this exact verified recording from the camera phone? The verified laptop copy will be kept.")) return;
+    setAdbBusy(true);
+    try {
+      setAdbCamera(await api<AdbCameraStatus>("/adb-camera/delete-phone-copy", { method: "POST" }));
+      setNotice("The verified phone recording was deleted; the laptop copy was kept.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not delete the phone copy");
+    } finally {
+      setAdbBusy(false);
     }
   };
 
@@ -576,7 +861,8 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     runAction(async () => {
       if (!opmode) throw new Error("Select an OpMode first");
       await api<Status>("/opmodes/init", { method: "POST", body: JSON.stringify({ name: opmode }) });
-      setNotice(`Initialized ${opmode}.`);
+      setNotice(`Initialized ${opmode}. The selected camera recording was requested.`);
+      void refreshAdbCamera();
     });
 
   const start = () =>
@@ -590,7 +876,8 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     runAction(async () => {
       await api<Status>("/opmodes/stop", { method: "POST" });
       setGamepad(neutralGamepad());
-      setNotice("Stop requested and both gamepad slots released.");
+      setNotice("Robot stopped and gamepads released. Camera finalization and transfer started.");
+      void refreshAdbCamera();
     });
 
   const runLifecycleAction = () => {
@@ -603,7 +890,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     ? { label: "Stop", className: "danger", requiresOpmode: false }
     : status.robot_state === "INIT"
       ? { label: "Start", className: "primary", requiresOpmode: true }
-      : { label: "Init", className: "primary", requiresOpmode: true };
+      : { label: adbCamera.selected_camera_serial ? "Init + camera" : "Init", className: "primary", requiresOpmode: true };
 
   const releaseAll = () =>
     runAction(async () => {
@@ -632,6 +919,22 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     ].sort(([left], [right]) => left.localeCompare(right));
   }, [status.telemetry]);
   const opmodeError = status.driver_station_error;
+  const nativeCamera = adbCamera.camera;
+  const directMode = captureCamera.config.mode === "scrcpy_direct";
+  const nativeCameraWorking = ["STARTING", "RECORDING_UNVERIFIED", "RECORDING", "STOPPING", "FINALIZING", "IMPORTING"].includes(nativeCamera.state);
+  const cameraWorking = directMode ? captureCamera.recording : nativeCameraWorking;
+  const cameraHealthy = directMode
+    ? !captureCamera.error && (captureCamera.recording || captureCamera.preview.running)
+    : ["READY", "RECORDING_UNVERIFIED", "RECORDING", "LAPTOP_VERIFIED", "VERIFIED"].includes(nativeCamera.state);
+  const roleChangesLocked = captureCamera.recording || nativeCameraWorking || adbBusy;
+  const cameraSummary = directMode
+    ? captureCamera.recording ? "Recording" : captureCamera.preview.running ? "Preview" : captureCamera.error ? "Error" : "Waiting"
+    : nativeCamera.state === "IMPORTING" && nativeCamera.transfer_progress !== null
+      ? `Copying ${nativeCamera.transfer_progress}%`
+      : cameraStateLabel(nativeCamera.state);
+  const cameraDetail = directMode
+    ? captureCamera.error ?? captureCamera.preview.detail ?? "Direct camera preview is waiting for its assigned Android phone."
+    : nativeCamera.detail;
 
   const controllerName = (controllerIndex: number | null) => {
     if (controllerIndex === null) return null;
@@ -646,6 +949,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
         {([1, 2] as const).map((driver) => { const assigned = controllerName(assignments[driver]); return <span className={assigned ? "active" : ""} key={driver}><i className="driver-dot" />D{driver}: {assigned ? "Ready" : physicalMode ? "Unassigned" : user === driver ? "Virtual" : "Available"}</span>; })}
       </div>
       <div className={`topbar-tcp ${robotData.connected ? "active" : ""}`}><i className="driver-dot" />TCP {robotData.connected ? "Connected" : robotData.listening ? "Listening" : "Offline"}</div>
+      <div className={`topbar-camera ${cameraHealthy ? "active" : ""} ${cameraWorking ? "recording" : ""}`} title={cameraDetail}><i className="driver-dot" />Camera · {cameraSummary}</div>
       <a className={`topbar-link ${page === "configuration" ? "current" : ""}`} href="#/configure">Configure Robot</a><a className={`topbar-link ${page === "debug" ? "current" : ""}`} href="#/debugger">Debugger</a><a className="topbar-link" href={page === "telemetry" ? "#/" : "#/telemetry"}>{page === "telemetry" ? "Driver Station" : "Telemetry Lab"}</a>
     </div>
   </header>;
@@ -682,6 +986,95 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
         <div className="action-row">
           <button className={lifecycleAction.className} type="button" disabled={!connected || busy || (lifecycleAction.requiresOpmode && !opmode)} onClick={() => void runLifecycleAction()}>{lifecycleAction.label}</button>
         </div>
+      </section>
+
+      <section className="adb-camera-panel panel">
+        <div className="panel-heading">
+          <div><p className="eyebrow">Camera capture</p><h2>{directMode ? "Direct scrcpy" : "ADB Volume Up"}</h2></div>
+          <span>{cameraSummary.toUpperCase()}</span>
+        </div>
+        <div className="camera-mode-controls">
+          <label>Capture mode
+            <select value={captureCamera.config.mode} disabled={roleChangesLocked} onChange={(event) => void saveCaptureConfig(event.target.value as CaptureMode)}>
+              <option value="scrcpy_direct">Direct scrcpy</option>
+              <option value="adb_volume_up">ADB Volume Up</option>
+            </select>
+          </label>
+          <small>{directMode ? "Preview is 240 px / 10 FPS while idle. Init records at the selected FPS." : "Init and Stop press the phone's native Camera controls. Live preview is disabled."}</small>
+        </div>
+        {directMode ? <div className="direct-camera-settings">
+          <label>Lens
+            <select value={directDraft.facing ?? "back"} disabled={roleChangesLocked} onChange={(event) => editDirectCapture({ facing: event.target.value as DirectCaptureSettings["facing"] })}>
+              <option value="back">Rear</option><option value="front">Front</option><option value="external">External</option>
+            </select>
+          </label>
+          <label>Aspect ratio
+            <select value={directDraft.aspect_ratio ?? ""} disabled={roleChangesLocked} onChange={(event) => editDirectCapture({ aspect_ratio: event.target.value || null })}>
+              <option value="">Camera default</option><option value="16:9">16:9</option><option value="4:3">4:3</option><option value="1:1">1:1</option>
+            </select>
+          </label>
+          <label>Recording FPS
+            <input type="number" min="1" max="120" step="1" value={directDraft.fps} disabled={roleChangesLocked} onChange={(event) => editDirectCapture({ fps: Number(event.target.value) || 1 })} />
+          </label>
+          <label className="camera-flip"><input type="checkbox" checked={directDraft.flip} disabled={roleChangesLocked} onChange={(event) => editDirectCapture({ flip: event.target.checked })} /> Flip video</label>
+          <button className="secondary" type="button" disabled={roleChangesLocked} onClick={() => void saveCaptureConfig("scrcpy_direct", directDraft)}>Save camera settings</button>
+        </div> : <p className="camera-preflight">Choose the Android camera below. Set its native Camera lens and frame rate on the phone before Init.</p>}
+        {adbCamera.adb_error && <p className="camera-error">{adbCamera.adb_error}</p>}
+        {directMode && <DirectCameraPreview active={captureCamera.preview.running && !captureCamera.recording} detail={cameraDetail} />}
+        {latestUpload && <div className={`camera-upload-status upload-${latestUpload[1].state}`}>
+          <strong>Telemetry upload · {latestUpload[1].state.replaceAll("_", " ")}</strong>
+          <span>{latestUpload[0]}</span>
+          {latestUpload[1].detail && <small>{latestUpload[1].detail}</small>}
+          {latestUpload[1].state === "uploading" && typeof latestUpload[1].totalBytes === "number" && latestUpload[1].totalBytes > 0 && (() => {
+            const progress = Math.min(100, Math.round((latestUpload[1].uploadedBytes ?? 0) / latestUpload[1].totalBytes * 100));
+            return <div className="upload-progress" role="progressbar" aria-label="Telemetry upload progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
+              <div className="upload-progress-fill" style={{ width: `${progress}%` }} />
+              <span>{progress}% · {bytesLabel(latestUpload[1].uploadedBytes ?? 0)} / {bytesLabel(latestUpload[1].totalBytes)}</span>
+            </div>;
+          })()}
+        </div>}
+        <div className="adb-device-list">
+          {adbCamera.devices.length ? adbCamera.devices.map((device) => (
+            <article className={`adb-device-card role-${device.effective_role}`} key={device.serial}>
+              <div className="adb-device-heading">
+                <div><strong>{device.model}</strong><small>{device.manufacturer ?? "Android"} · …{device.serial_suffix} · Android {device.android_version ?? "?"}</small></div>
+                <span>{device.effective_role.replace("_", " ")}</span>
+              </div>
+              <p>{device.role_reason}</p>
+              <div className="adb-evidence">
+                <span>{device.adb_state === "device" ? "USB ready" : device.adb_state}</span>
+                {device.rc_active && <span className="warning">FTC RC active</span>}
+                {!device.rc_active && device.rc_installed && <span>FTC RC installed</span>}
+                {device.camera_capable && <span>Camera available</span>}
+                {device.suggested_role === "camera" && <span className="suggested">Suggested camera</span>}
+              </div>
+              <div className="adb-role-actions">
+                <button className={device.preferred_role === "robot_controller" ? "selected" : ""} type="button" disabled={roleChangesLocked || device.adb_state !== "device"} onClick={() => void assignAdbRole(device.serial, "robot_controller")}>Use as RC</button>
+                <button className={device.preferred_role === "camera" ? "selected" : ""} type="button" disabled={roleChangesLocked || device.adb_state !== "device" || !device.camera_capable || device.rc_active || device.is_control_hub} onClick={() => void assignAdbRole(device.serial, "camera")}>Use as camera</button>
+                <button type="button" disabled={roleChangesLocked || device.preferred_role === "auto"} onClick={() => void assignAdbRole(device.serial, "auto")}>Auto</button>
+                <button type="button" disabled={roleChangesLocked || device.preferred_role === "ignored" || device.rc_active || device.is_control_hub} onClick={() => void assignAdbRole(device.serial, "ignored")}>Ignore</button>
+              </div>
+            </article>
+          )) : <p className="empty-state">Connect and authorize an Android device with USB debugging enabled.</p>}
+        </div>
+        {!directMode && <div className="camera-runtime">
+          <div>
+            <strong>{nativeCamera.device_model ?? "No camera selected"}</strong>
+            <small>{nativeCamera.detail}</small>
+            {nativeCamera.error && <small className="camera-error">{nativeCamera.error}</small>}
+          </div>
+          <div className="camera-runtime-meta">
+            {nativeCamera.battery_percent !== null && <span>Battery {nativeCamera.battery_percent}%</span>}
+            {nativeCamera.free_storage_bytes !== null && <span>Free {bytesLabel(nativeCamera.free_storage_bytes)}</span>}
+            {nativeCamera.width && nativeCamera.height && <span>{nativeCamera.width}×{nativeCamera.height}</span>}
+            {nativeCamera.duration_ms !== null && <span>{(nativeCamera.duration_ms / 1000).toFixed(1)} s</span>}
+          </div>
+          <div className="camera-runtime-actions">
+            {nativeCameraWorking && <button className="danger" type="button" disabled={adbBusy} onClick={() => void stopNativeCamera()}>Stop camera</button>}
+            {nativeCamera.phone_copy_pending && <button className="secondary" type="button" disabled={adbBusy} onClick={() => void deletePhoneCopy()}>Delete phone copy…</button>}
+          </div>
+        </div>}
+        {directMode && captureCamera.preview.running && <div className="camera-runtime-actions direct-preview-actions"><button className="secondary" type="button" disabled={adbBusy} onClick={() => void stopDirectPreview()}>Stop preview</button></div>}
       </section>
       </section>
 
@@ -761,12 +1154,13 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     </main>}
     {page === "telemetry" && <TelemetryDashboard topbar={topbar} />}
     {page === "debug" && <MotorLab />}
-    {pendingRecording && <RecordingDecisionModal
+    {pendingRecording && <RecordingUploadModal
       sessionId={pendingRecording[0]}
       uploadState={pendingRecording[1]}
       busy={recordingBusy}
-      onUpload={(keepLocal = false) => void recordingAction("upload", keepLocal)}
-      onDelete={() => void recordingAction("delete")}
+      onUploadOnly={() => void recordingAction("upload_only")}
+      onUploadAndKeepLocal={() => void recordingAction("upload_keep_local")}
+      onDiscard={() => void recordingAction("discard")}
     />}
     </>
   );

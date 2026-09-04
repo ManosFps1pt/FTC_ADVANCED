@@ -23,6 +23,9 @@ class RecordingUploadError(RuntimeError):
     """Raised when a recording cannot be safely uploaded."""
 
 
+UploadProgressCallback = Callable[[int, int, str | None], None]
+
+
 @dataclass(frozen=True, slots=True)
 class UploadSettings:
     host: str
@@ -127,8 +130,12 @@ class RecordingUploader:
         self,
         recording_directory: Path,
         progress: Callable[[str], None] | None = None,
+        progress_callback: UploadProgressCallback | None = None,
     ) -> UploadResult:
         source, session_id, files = _validated_session(recording_directory)
+        total_bytes = sum(path.stat().st_size for path in files)
+        completed_bytes = 0
+        _report_progress(progress_callback, total_bytes, completed_bytes, None)
         _announce(progress, f"Connecting to {self.settings.host} as {self.settings.username}")
         client = self._connect()
         try:
@@ -139,6 +146,7 @@ class RecordingUploader:
                 stage_path = posixpath.join(remote_root, ".incoming", session_id)
                 if _remote_exists(sftp, final_path):
                     _announce(progress, "Recording is already present on the server")
+                    _report_progress(progress_callback, total_bytes, total_bytes, None)
                     return UploadResult(session_id, 0, len(files), 0, already_present=True)
                 _mkdirs(sftp, stage_path)
                 uploaded_files = skipped_files = uploaded_bytes = 0
@@ -149,6 +157,8 @@ class RecordingUploader:
                     size = local_path.stat().st_size
                     if _remote_size(sftp, remote_path) == size:
                         skipped_files += 1
+                        completed_bytes += size
+                        _report_progress(progress_callback, total_bytes, completed_bytes, relative)
                         _announce(progress, f"Already uploaded: {relative}")
                         continue
                     existing_size = _remote_size(sftp, remote_path)
@@ -159,6 +169,7 @@ class RecordingUploader:
                     mode = "r+" if resume_at else "wb"
                     _announce(progress, f"{'Resuming' if resume_at else 'Uploading'}: {relative}")
                     written = resume_at
+                    _report_progress(progress_callback, total_bytes, completed_bytes + written, relative)
                     next_progress = ((written // (5 * 1024 * 1024)) + 1) * 5 * 1024 * 1024
                     with local_path.open("rb") as local_handle, sftp.file(remote_path, mode) as remote_handle:
                         local_handle.seek(resume_at)
@@ -166,6 +177,7 @@ class RecordingUploader:
                         while chunk := local_handle.read(1024 * 1024):
                             remote_handle.write(chunk)
                             written += len(chunk)
+                            _report_progress(progress_callback, total_bytes, completed_bytes + written, relative)
                             if written >= next_progress or written == size:
                                 _announce(progress, f"Uploading {relative}: {written / 1024 / 1024:.1f} / {size / 1024 / 1024:.1f} MiB")
                                 next_progress += 5 * 1024 * 1024
@@ -173,8 +185,11 @@ class RecordingUploader:
                         raise RecordingUploadError(f"Remote size verification failed for {relative}")
                     uploaded_files += 1
                     uploaded_bytes += size
+                    completed_bytes += size
+                    _report_progress(progress_callback, total_bytes, completed_bytes, relative)
                 _rename_into_library(client, stage_path, final_path)
                 _announce(progress, "Upload complete; recording is now visible in the library")
+                _report_progress(progress_callback, total_bytes, total_bytes, None)
                 return UploadResult(session_id, uploaded_files, skipped_files, uploaded_bytes)
             finally:
                 sftp.close()
@@ -324,6 +339,16 @@ def _rename_into_library(client, stage_path: str, final_path: str) -> None:
 def _announce(progress: Callable[[str], None] | None, message: str) -> None:
     if progress is not None:
         progress(message)
+
+
+def _report_progress(
+    callback: UploadProgressCallback | None,
+    total_bytes: int,
+    completed_bytes: int,
+    current_file: str | None,
+) -> None:
+    if callback is not None:
+        callback(total_bytes, min(completed_bytes, total_bytes), current_file)
 
 
 def main() -> int:

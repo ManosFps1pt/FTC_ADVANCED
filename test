@@ -1,0 +1,6 @@
+$Fqdn = "desktop-m5vcvm0.tail953190.ts.net"
+
+$env:FTC_ADVANCED_MCP_ALLOWED_HOSTS = "$Fqdn,${Fqdn}:443"
+$env:FTC_ADVANCED_MCP_ALLOWED_ORIGINS = "https://$Fqdn"
+
+.\run_mcp_server.bat

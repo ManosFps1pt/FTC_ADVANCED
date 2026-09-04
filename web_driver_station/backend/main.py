@@ -19,11 +19,11 @@ import uuid
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Literal
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -44,6 +44,8 @@ from .debug_commands import build_debug_command_request, command_request_id
 from .ftclog import FtcLogError, RawFtcLogRecorder
 from .recording_uploader import RecordingUploadError, RecordingUploader, UploadSettings
 from .video_recorder import CameraRecordingConfig, VideoRecorder, VideoRecorderError
+from .adb_camera import AdbCameraError, AdbCameraService
+from .camera_recording import CameraRecordingCoordinator, CameraRecordingError
 
 
 class ConnectRequest(BaseModel):
@@ -118,6 +120,22 @@ class DebugCommandHttpRequest(BaseModel):
 
 class RecordingUploadRequest(BaseModel):
     keep_local: bool = False
+
+
+class AdbDeviceRoleRequest(BaseModel):
+    role: Literal["auto", "robot_controller", "camera", "ignored"]
+
+
+class DirectScrcpySettingsRequest(BaseModel):
+    facing: Literal["front", "back", "external"] | None = "back"
+    aspect_ratio: str | None = Field(default=None, max_length=64)
+    fps: int = Field(default=60, ge=1, le=120)
+    flip: bool = False
+
+
+class CameraCaptureConfigRequest(BaseModel):
+    mode: Literal["scrcpy_direct", "adb_volume_up"] = "scrcpy_direct"
+    direct: DirectScrcpySettingsRequest = Field(default_factory=DirectScrcpySettingsRequest)
 
 
 # Mirror the SDK's filename safety checks while also excluding the semicolon
@@ -417,6 +435,11 @@ class DriverStationService:
 class RobotDataService:
     """Expose raw packets and structured telemetry to the web dashboard."""
 
+    # A Robot Controller stop and the final TCP disconnect can coincide with a
+    # short-lived Wi-Fi/SSH interruption. Keep finalized data locally and retry
+    # only those transport failures before surfacing a terminal upload error.
+    _AUTO_UPLOAD_RETRY_DELAYS_SECONDS = (2.0, 10.0)
+
     def __init__(self) -> None:
         host = os.getenv("ROBOT_DATA_TCP_HOST", DEFAULT_HOST)
         port = int(os.getenv("ROBOT_DATA_TCP_PORT", str(DEFAULT_PORT)))
@@ -450,6 +473,12 @@ class RobotDataService:
         self._raw_recorder = RawFtcLogRecorder(recordings_root)
         self._recording_uploader: RecordingUploader | None = None
         self._upload_states: dict[str, dict[str, Any]] = {}
+        self._raw_finalized: set[str] = set()
+        self._video_errors: dict[str, str] = {}
+        self._video_ready_checker: Callable[[str], bool] = lambda _session_id: True
+        self._session_bound_callback: Callable[[str], None] | None = None
+        self._capture_stop_callback: Callable[[str], None] | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         try:
             upload_settings = UploadSettings.from_environment()
             if upload_settings is not None:
@@ -458,7 +487,31 @@ class RobotDataService:
             self._upload_states["configuration"] = {"state": "error", "detail": str(error)}
 
     async def start(self) -> None:
+        self._loop = asyncio.get_running_loop()
         await self._server.start()
+
+    def set_capture_callbacks(
+        self,
+        *,
+        video_ready_checker: Callable[[str], bool],
+        session_bound: Callable[[str], None],
+        capture_stop: Callable[[str], None],
+    ) -> None:
+        self._video_ready_checker = video_ready_checker
+        self._session_bound_callback = session_bound
+        self._capture_stop_callback = capture_stop
+
+    def video_finalized_from_thread(self, session_id: str, error: str | None) -> None:
+        """Accept camera-worker completion without touching asyncio from its thread."""
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        asyncio.run_coroutine_threadsafe(self.video_finalized(session_id, error), loop)
+
+    async def video_finalized(self, session_id: str, error: str | None) -> None:
+        if error:
+            self._video_errors[session_id] = error
+        await self._prepare_upload_decision(session_id)
 
     async def close(self) -> None:
         await self._server.close()
@@ -652,6 +705,11 @@ class RobotDataService:
     def recording_path(self, session_id: str, log_name: str) -> Path:
         return self._raw_recorder.log_path(session_id, log_name)
 
+    @property
+    def recordings_root(self) -> Path:
+        """One root shared by telemetry, selected camera video, and uploads."""
+        return self._raw_recorder.recordings_root
+
     async def _on_raw_packet(
         self,
         envelope: wire.Envelope,
@@ -668,6 +726,8 @@ class RobotDataService:
             await asyncio.to_thread(self._raw_recorder.append, session_id, protobuf_frame, received_monotonic_ns)
             if peer is not None:
                 self._connection_sessions[peer] = session_id
+            if self._session_bound_callback is not None:
+                self._session_bound_callback(session_id)
         except FtcLogError:
             # The receiver will still validate and expose its live state; the
             # raw recorder status retains the disk failure for the operator.
@@ -721,6 +781,7 @@ class RobotDataService:
             return self._hello_ack(packet.envelope, resumed=resumed)
         if any(payload.get("type") == "session_end" for payload in packet.payloads) and isinstance(session_id, str):
             await self._finalize_recording(session_id)
+            await self._stop_capture_for_session(session_id)
         return None
 
     @staticmethod
@@ -759,22 +820,65 @@ class RobotDataService:
                 session_id = self._connection_sessions.pop(peer, None)
                 if session_id is not None:
                     await self._finalize_recording(session_id)
+                    await self._stop_capture_for_session(session_id)
                 for update in self._telemetry.disconnect_connection(connection_id):
                     await self._broadcast_telemetry(update)
         await self._broadcast_status()
 
+    async def _stop_capture_for_session(self, session_id: str) -> None:
+        callback = self._capture_stop_callback
+        if callback is None:
+            return
+        try:
+            # Direct scrcpy may take a moment to close its MP4. Keep that work
+            # off the robot-data server event loop while preserving the
+            # wait-for-video upload ordering.
+            await asyncio.to_thread(callback, session_id)
+        except Exception:
+            # Raw telemetry remains durable if a disconnected camera cannot be
+            # stopped a second time.
+            pass
+
     async def _finalize_recording(self, session_id: str) -> None:
-        """Finalize locally and wait for an explicit upload/delete decision."""
+        """Finalize telemetry, then wait for the operator's upload decision."""
 
         try:
             final_path = await asyncio.to_thread(self._raw_recorder.close_session, session_id)
         except FtcLogError:
             return
-        if final_path is None or self._recording_uploader is None:
+        if final_path is None:
+            return
+        self._raw_finalized.add(session_id)
+        await self._prepare_upload_decision(session_id)
+
+    async def _prepare_upload_decision(self, session_id: str) -> None:
+        """Expose a finalized recording for an explicit upload or discard choice."""
+        if session_id not in self._raw_finalized:
+            return
+        if session_id in self._video_errors:
+            self._upload_states[session_id] = {"state": "error", "detail": self._video_errors[session_id]}
+            await self._broadcast_status()
+            return
+        if not self._video_ready_checker(session_id):
+            self._upload_states[session_id] = {
+                "state": "waiting_for_video",
+                "detail": "Telemetry finalized; waiting for video finalization.",
+            }
+            await self._broadcast_status()
+            return
+        if self._recording_uploader is None:
+            self._upload_states[session_id] = {
+                "state": "error",
+                "detail": "Recording upload is not configured on this laptop.",
+            }
+            await self._broadcast_status()
+            return
+        current = self._upload_states.get(session_id, {})
+        if current.get("state") in {"ready_to_upload", "uploading", "complete"}:
             return
         self._upload_states[session_id] = {
-            "state": "pending_confirmation",
-            "detail": "Recording finalized. Choose upload or delete.",
+            "state": "ready_to_upload",
+            "detail": "Recording is ready. Choose whether to upload it or discard it.",
         }
         await self._broadcast_status()
 
@@ -782,51 +886,109 @@ class RobotDataService:
         if self._recording_uploader is None:
             raise RecordingUploadError("Recording upload is not configured on this laptop")
         current = self._upload_states.get(session_id)
-        if current is None or current.get("state") != "pending_confirmation":
-            raise RecordingUploadError("This recording is not waiting for an upload decision")
+        if current is None or current.get("state") not in {"ready_to_upload", "error"}:
+            raise RecordingUploadError("This recording is not ready to upload")
+        if not self._video_ready_checker(session_id):
+            raise RecordingUploadError("Video is still finalizing")
+        await self._begin_upload(session_id, keep_local=keep_local)
+        return {"session_id": session_id, "state": "uploading"}
+
+    async def _begin_upload(self, session_id: str, *, keep_local: bool = True) -> None:
+        if self._recording_uploader is None:
+            raise RecordingUploadError("Recording upload is not configured on this laptop")
         recording_directory = self._raw_recorder.session_path(session_id)
         self._upload_states[session_id] = {"state": "uploading", "detail": "Upload started"}
         await self._broadcast_status()
+        loop = asyncio.get_running_loop()
+
+        def progress(total_bytes: int, uploaded_bytes: int, current_file: str | None) -> None:
+            loop.call_soon_threadsafe(
+                self._record_upload_progress,
+                session_id,
+                total_bytes,
+                uploaded_bytes,
+                current_file,
+            )
 
         async def upload() -> None:
-            try:
-                result = await asyncio.to_thread(self._recording_uploader.upload, recording_directory)
-                if not keep_local:
-                    try:
-                        await asyncio.to_thread(self._raw_recorder.delete_session, session_id)
-                    except FtcLogError as error:
-                        self._upload_states[session_id] = {
-                            "state": "error",
-                            "detail": f"Uploaded to server, but local cleanup failed: {error}",
-                            "uploadedFiles": result.uploaded_files,
-                            "skippedFiles": result.skipped_files,
-                        }
+            attempt = 0
+            while True:
+                try:
+                    result = await asyncio.to_thread(
+                        self._recording_uploader.upload,
+                        recording_directory,
+                        progress_callback=progress,
+                    )
+                    if not keep_local:
+                        try:
+                            await asyncio.to_thread(self._raw_recorder.delete_session, session_id)
+                        except FtcLogError as error:
+                            self._upload_states[session_id] = {
+                                "state": "error",
+                                "detail": f"Uploaded to server, but local cleanup failed: {error}",
+                                "uploadedFiles": result.uploaded_files,
+                                "skippedFiles": result.skipped_files,
+                            }
+                        else:
+                            self._upload_states[session_id] = {
+                                "state": "complete",
+                                "uploadedFiles": result.uploaded_files,
+                                "skippedFiles": result.skipped_files,
+                                "localCopyKept": False,
+                            }
                     else:
                         self._upload_states[session_id] = {
                             "state": "complete",
                             "uploadedFiles": result.uploaded_files,
                             "skippedFiles": result.skipped_files,
-                            "localCopyKept": False,
+                            "localCopyKept": True,
                         }
-                else:
+                    await self._broadcast_status()
+                    return
+                except RecordingUploadError as error:
+                    if (attempt >= len(self._AUTO_UPLOAD_RETRY_DELAYS_SECONDS)
+                            or not _is_transient_upload_error(error)):
+                        # The finalized local session remains untouched, so a
+                        # terminal failure can still be retried manually.
+                        self._upload_states[session_id] = {"state": "error", "detail": str(error)}
+                        await self._broadcast_status()
+                        return
+                    delay = self._AUTO_UPLOAD_RETRY_DELAYS_SECONDS[attempt]
+                    attempt += 1
                     self._upload_states[session_id] = {
-                        "state": "complete",
-                        "uploadedFiles": result.uploaded_files,
-                        "skippedFiles": result.skipped_files,
-                        "localCopyKept": True,
+                        "state": "retrying",
+                        "detail": f"{error}; retrying in {delay:g} seconds ({attempt}/{len(self._AUTO_UPLOAD_RETRY_DELAYS_SECONDS)})",
                     }
-            except RecordingUploadError as error:
-                # The finalized local session remains untouched, so the CLI can
-                # retry it safely after connectivity is restored.
-                self._upload_states[session_id] = {"state": "error", "detail": str(error)}
-            await self._broadcast_status()
+                    await self._broadcast_status()
+                    await asyncio.sleep(delay)
+                    self._upload_states[session_id] = {"state": "uploading", "detail": f"Retry {attempt} started"}
+                    await self._broadcast_status()
 
         asyncio.create_task(upload(), name=f"upload-recording-{session_id}")
-        return {"session_id": session_id, "state": "uploading"}
+
+    def _record_upload_progress(
+        self,
+        session_id: str,
+        total_bytes: int,
+        uploaded_bytes: int,
+        current_file: str | None,
+    ) -> None:
+        """Relay byte-level SFTP progress from its worker thread to the UI."""
+
+        state = self._upload_states.get(session_id)
+        if state is None or state.get("state") != "uploading":
+            return
+        state.update({
+            "totalBytes": total_bytes,
+            "uploadedBytes": uploaded_bytes,
+            "currentFile": current_file,
+            "detail": "Uploading recording" if current_file is None else f"Uploading {current_file}",
+        })
+        asyncio.create_task(self._broadcast_status())
 
     async def delete_recording(self, session_id: str) -> dict[str, Any]:
         current = self._upload_states.get(session_id)
-        if current is None or current.get("state") not in {"pending_confirmation", "error"}:
+        if current is None or current.get("state") not in {"waiting_for_video", "error", "complete"}:
             raise FtcLogError("This recording cannot be deleted in its current state")
         if self._recording_uploader is not None:
             await asyncio.to_thread(self._recording_uploader.delete, session_id)
@@ -834,6 +996,26 @@ class RobotDataService:
         self._upload_states[session_id] = {"state": "deleted", "detail": "Recording deleted locally"}
         await self._broadcast_status()
         return {"session_id": session_id, "state": "deleted"}
+
+    async def discard_recording(self, session_id: str) -> dict[str, Any]:
+        """Delete a finalized local recording before it has been uploaded."""
+
+        current = self._upload_states.get(session_id)
+        if current is None or current.get("state") not in {"ready_to_upload", "error"}:
+            raise FtcLogError("This recording cannot be discarded in its current state")
+        await asyncio.to_thread(self._raw_recorder.delete_session, session_id)
+        self._upload_states[session_id] = {"state": "discarded", "detail": "Recording discarded from this laptop"}
+        await self._broadcast_status()
+        return {"session_id": session_id, "state": "discarded"}
+
+    async def delete_local_recording(self, session_id: str) -> dict[str, Any]:
+        current = self._upload_states.get(session_id)
+        if current is None or current.get("state") != "complete":
+            raise FtcLogError("Only a completed upload can have its local copy deleted")
+        await asyncio.to_thread(self._raw_recorder.delete_session, session_id)
+        self._upload_states[session_id] = {"state": "local_deleted", "detail": "Uploaded session removed from this laptop"}
+        await self._broadcast_status()
+        return {"session_id": session_id, "state": "local_deleted"}
 
     async def _broadcast_status(self) -> None:
         message = {"kind": "robot_data_status", "data": self.status()}
@@ -871,10 +1053,24 @@ class RobotDataService:
 
 service = DriverStationService()
 robot_data_service = RobotDataService()
-_video_recordings_root = Path(
-    os.getenv("ROBOT_VIDEO_RECORDINGS_DIR", str(Path(__file__).resolve().parents[1] / "recordings"))
-).resolve()
+# A capture must join the raw `.ftclog` tree before upload.  Keep the legacy
+# standalone webcam service in this same root too, rather than letting a
+# separate video environment variable split a telemetry session in two.
+_video_recordings_root = robot_data_service.recordings_root.resolve()
 video_recorder = VideoRecorder(_video_recordings_root)
+_camera_staging_root = _video_recordings_root / ".camera-staging"
+adb_camera_service = AdbCameraService(_camera_staging_root)
+camera_coordinator = CameraRecordingCoordinator(
+    _video_recordings_root,
+    adb_camera_service,
+    on_video_finalized=robot_data_service.video_finalized_from_thread,
+)
+adb_camera_service.set_finalized_callback(camera_coordinator.notify_adb_finalized)
+robot_data_service.set_capture_callbacks(
+    video_ready_checker=camera_coordinator.video_ready_for,
+    session_bound=camera_coordinator.bind_telemetry_session,
+    capture_stop=camera_coordinator.stop_recording_for_session,
+)
 app = FastAPI(title="FTC Local Driver Station", docs_url=None, redoc_url=None)
 app.add_middleware(
     CORSMiddleware,
@@ -888,6 +1084,8 @@ app.add_middleware(
 async def startup() -> None:
     service.set_event_loop(asyncio.get_running_loop())
     await robot_data_service.start()
+    adb_camera_service.start()
+    await asyncio.to_thread(camera_coordinator.start)
 
 
 @app.on_event("shutdown")
@@ -898,6 +1096,8 @@ async def shutdown() -> None:
         pass
     await robot_data_service.close()
     service.disconnect(stop=True)
+    camera_coordinator.close()
+    adb_camera_service.close()
 
 
 def _http_error(error: Exception) -> HTTPException:
@@ -912,6 +1112,21 @@ def _validate_gamepad_user(user: int) -> None:
 @app.get("/api/status")
 def get_status() -> dict[str, Any]:
     return service.status()
+
+
+def _is_transient_upload_error(error: RecordingUploadError) -> bool:
+    """Return whether a retained recording should get an automatic retry."""
+
+    detail = str(error).lower()
+    return any(marker in detail for marker in (
+        "device disconnected",
+        "connection reset",
+        "connection refused",
+        "connection timed out",
+        "timed out",
+        "eof during negotiation",
+        "no existing session",
+    ))
 
 
 @app.get("/api/data/status")
@@ -999,11 +1214,93 @@ async def delete_robot_data_recording(session_id: str) -> dict[str, Any]:
         raise _http_error(error) from error
 
 
+@app.delete("/api/data/recordings/{session_id}/discard")
+async def discard_robot_data_recording(session_id: str) -> dict[str, Any]:
+    try:
+        return await robot_data_service.discard_recording(session_id)
+    except FtcLogError as error:
+        raise _http_error(error) from error
+
+
+@app.delete("/api/data/recordings/{session_id}/local")
+async def delete_local_robot_data_recording(session_id: str) -> dict[str, Any]:
+    try:
+        return await robot_data_service.delete_local_recording(session_id)
+    except FtcLogError as error:
+        raise _http_error(error) from error
+
+
 @app.get("/api/video/status")
 def get_video_status() -> dict[str, Any]:
     """Return state for the single local camera recorder."""
 
     return video_recorder.status()
+
+
+@app.get("/api/adb-camera/status")
+def get_adb_camera_status() -> dict[str, Any]:
+    return adb_camera_service.status()
+
+
+@app.post("/api/adb-camera/refresh")
+def refresh_adb_devices() -> dict[str, Any]:
+    return adb_camera_service.refresh_devices()
+
+
+@app.put("/api/adb-camera/devices/{serial}/role")
+def assign_adb_device_role(serial: str, request: AdbDeviceRoleRequest) -> dict[str, Any]:
+    try:
+        return adb_camera_service.assign_role(serial, request.role)
+    except AdbCameraError as error:
+        raise _http_error(error) from error
+
+
+@app.post("/api/adb-camera/stop")
+def stop_adb_camera_recording() -> dict[str, Any]:
+    try:
+        return adb_camera_service.stop_recording()
+    except AdbCameraError as error:
+        raise _http_error(error) from error
+
+
+@app.post("/api/adb-camera/delete-phone-copy")
+def delete_adb_camera_phone_copy() -> dict[str, Any]:
+    try:
+        return adb_camera_service.delete_phone_copy()
+    except AdbCameraError as error:
+        raise _http_error(error) from error
+
+
+@app.get("/api/camera/status")
+def camera_status() -> dict[str, Any]:
+    """Unified dashboard capture status; legacy ADB routes remain available."""
+    return {"capture": camera_coordinator.status(), "adb": adb_camera_service.status()}
+
+
+@app.put("/api/camera/config")
+def update_camera_config(request: CameraCaptureConfigRequest) -> dict[str, Any]:
+    try:
+        return {"capture": camera_coordinator.update_config(
+            mode=request.mode, direct=request.direct.model_dump(),
+        ), "adb": adb_camera_service.status()}
+    except CameraRecordingError as error:
+        raise _http_error(error) from error
+
+
+@app.post("/api/camera/preview/stop")
+def stop_camera_preview() -> dict[str, Any]:
+    try:
+        return {"capture": camera_coordinator.stop_preview()}
+    except CameraRecordingError as error:
+        raise _http_error(error) from error
+
+
+@app.get("/api/camera/preview/frame")
+def camera_preview_frame() -> Response:
+    frame = camera_coordinator.preview_frame()
+    if frame is None:
+        return Response(status_code=204)
+    return Response(frame, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/video/start")
@@ -1054,7 +1351,9 @@ def connect(request: ConnectRequest) -> dict[str, Any]:
 
 @app.post("/api/disconnect")
 def disconnect() -> dict[str, Any]:
-    return service.disconnect(stop=True)
+    result = service.disconnect(stop=True)
+    camera_coordinator.stop_recording()
+    return result
 
 
 @app.get("/api/opmodes")
@@ -1107,9 +1406,14 @@ def save_configuration(request: ConfigurationSaveRequest) -> dict[str, object]:
 
 @app.post("/api/opmodes/init")
 def init_opmode(request: OpModeRequest) -> dict[str, Any]:
+    camera_started = False
     try:
+        camera_state = camera_coordinator.start_recording()
+        camera_started = bool(camera_state.get("recording"))
         return service.init_opmode(request)
-    except ControlHubError as error:
+    except (ControlHubError, CameraRecordingError) as error:
+        if camera_started:
+            camera_coordinator.stop_recording()
         raise _http_error(error) from error
 
 
@@ -1132,9 +1436,18 @@ def launch_debugger(request: OpModeRequest) -> dict[str, Any]:
 @app.post("/api/opmodes/stop")
 def stop_opmode() -> dict[str, Any]:
     try:
-        return service.stop_opmode()
+        result = service.stop_opmode()
     except ControlHubError as error:
+        # The phone must never be left recording just because Robocol lost its
+        # acknowledgement path. Camera Stop and import are independent of the
+        # RC transport and remain safe to execute in this failure mode.
+        camera_coordinator.stop_recording()
         raise _http_error(error) from error
+    try:
+        camera_coordinator.stop_recording()
+    except CameraRecordingError as error:
+        raise _http_error(error) from error
+    return result
 
 
 @app.put("/api/gamepads/{user}", status_code=204)
