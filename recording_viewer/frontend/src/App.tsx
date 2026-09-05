@@ -2,9 +2,11 @@ import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react"
 
 type Signal = { id: string; label: string; unit: string; valueType: string };
 type Catalog = { schemaRevision: number; signals: Signal[] };
-type Snapshot = { sampleSequence: string; schemaRevision: number; robotTimeNs: string; values: Record<string, unknown> };
+type Snapshot = { sampleSequence: string; schemaRevision: number; robotTimeNs: string; highlighted?: boolean; highlightSource?: string | null; values: Record<string, unknown> };
 type Gamepad = Record<string, boolean | number>;
 type GamepadFrame = { robotTimeNs: string; gamepad1: Gamepad; gamepad2: Gamepad };
+type Incident = { id: string; firstSampleSequence: string; lastSampleSequence: string; startRobotTimeNs: string; endRobotTimeNs: string; sources: string[] };
+type DebugMessage = { type: string; robotTimeNs: string; result?: string; commandId?: string; message?: string };
 type Recording = {
   session: { sessionId: string; robotName: string; opModeName: string } | null;
   catalog: Catalog | null;
@@ -12,11 +14,15 @@ type Recording = {
   snapshots: Snapshot[];
   gamepadFrames: GamepadFrame[];
   eventCount: number;
+  debugMessageCount: number;
   gapCount: number;
+  incidentCount: number;
   logFiles: string[];
   invalidFrames: number;
   recordingDirectory: string;
   videoClips: { index: number; name: string; url: string }[];
+  incidents: Incident[];
+  debugMessages: DebugMessage[];
 };
 type LibraryRecording = { id: string; logFileCount: number; videoFileCount: number; sizeBytes: number; modifiedAtNs: string };
 
@@ -138,6 +144,7 @@ export default function App() {
     return recording.gamepadFrames.reduce<GamepadFrame | null>((closest, frame) => !closest || Math.abs(Number(frame.robotTimeNs) - timeNs(snapshot)) < Math.abs(Number(closest.robotTimeNs) - timeNs(snapshot)) ? frame : closest, null);
   }, [recording, snapshot]);
   const traces = signals.filter(signal => selected.includes(signal.id));
+  const commandResponses = recording?.debugMessages.filter(message => message.type === "debug_command_response") ?? [];
   const toggle = (id: string) => setSelected(previous => previous.includes(id) ? previous.filter(value => value !== id) : [...previous, id].slice(-MAX_TRACES));
 
   if (error) return <main className="error"><h1>Could not open recording</h1><pre>{error}</pre>{selectedRecordingId && <button onClick={() => selectRecording(null)}>Back to recordings</button>}</main>;
@@ -145,7 +152,9 @@ export default function App() {
   if (!recording) return <main className="loading">Opening recording…</main>;
   return <main>
     <header className="topbar panel"><div><button className="back-button" onClick={() => selectRecording(null)}>← Recordings</button><p className="eyebrow">Offline replay</p><h1>{recording.session?.robotName ?? "FTC Recording"}</h1><p>{recording.session?.opModeName ?? "Unknown OpMode"}</p></div><dl><div><dt>Snapshots</dt><dd>{recording.snapshotCount.toLocaleString()}</dd></div><div><dt>Duration</dt><dd>{formatTime(duration)}</dd></div><div><dt>Log files</dt><dd>{recording.logFiles.length}</dd></div><div><dt>Gaps</dt><dd>{recording.gapCount}</dd></div></dl></header>
-    <section className="timeline panel"><div><div><p className="eyebrow">Snapshot master clock · whole recording</p><strong>{snapshot ? `Sample #${snapshot.sampleSequence}` : "No snapshots"}</strong><span>{formatTime(elapsed)} / {formatTime(duration)}</span></div><button onClick={() => setPlaying(value => !value)} disabled={!snapshot}>{playing ? "Pause" : "Play"}</button></div><input type="range" min="0" max={Math.max(0, duration)} step="0.001" value={playbackSeconds} onChange={event => { setPlaying(false); setPlaybackSeconds(Number(event.target.value)); }} /><div className="timeline-scale"><span>Start</span><span>End</span></div></section>
+    <section className="timeline panel"><div><div><p className="eyebrow">Snapshot master clock · whole recording</p><strong>{snapshot ? `Sample #${snapshot.sampleSequence}${snapshot.highlighted ? ` · Highlighted by ${snapshot.highlightSource === "telemetry_lab" ? "Telemetry Lab" : "Control Hub"}` : ""}` : "No snapshots"}</strong><span>{formatTime(elapsed)} / {formatTime(duration)}</span></div><button onClick={() => setPlaying(value => !value)} disabled={!snapshot}>{playing ? "Pause" : "Play"}</button></div><input type="range" min="0" max={Math.max(0, duration)} step="0.001" value={playbackSeconds} onChange={event => { setPlaying(false); setPlaybackSeconds(Number(event.target.value)); }} /><div className="timeline-scale"><span>Start</span><span>End</span></div></section>
+    {recording.incidents.length > 0 && <section className="replay-activity panel"><p className="eyebrow">Incident capture</p><div>{recording.incidents.map(incident => <button key={incident.id} onClick={() => { setPlaying(false); setPlaybackSeconds(Math.max(0, (Number(incident.startRobotTimeNs) - startNs) / 1_000_000_000)); }}><strong>{incident.sources.map(source => source === "telemetry_lab" ? "Telemetry Lab" : "Control Hub").join(" + ")}</strong><small>Samples #{incident.firstSampleSequence}–#{incident.lastSampleSequence}</small></button>)}</div></section>}
+    {commandResponses.length > 0 && <section className="replay-activity panel"><p className="eyebrow">Telemetry Lab command confirmations</p><div>{commandResponses.map((message, index) => <article key={`${message.robotTimeNs}-${index}`}><strong>{message.commandId ?? "Command"} · {message.result ?? "response"}</strong><small>{message.message ?? "Control Hub response recorded"}</small></article>)}</div></section>}
     <section className="video-playback panel"><div className="video-heading"><div><p className="eyebrow">Video playback</p><strong>{selectedVideo ? selectedVideo.name : "No video in this recording"}</strong><small>Video plays at its native frame rate; snapshots follow the master clock independently.</small></div>{recording.videoClips.length > 1 && <label>Clip<select value={selectedVideoIndex} onChange={event => { setPlaying(false); setSelectedVideoIndex(Number(event.target.value)); setVideoDurationSeconds(null); }}>{recording.videoClips.map(clip => <option value={clip.index} key={clip.index}>{clip.name}</option>)}</select></label>}</div>{selectedVideo ? <div className="video-stage">{videoHasEnded ? <div className="black-frame">Video ended · snapshots continue to {formatTime(duration)}</div> : <video ref={videoRef} src={selectedVideo.url} muted playsInline preload="metadata" onLoadedMetadata={event => setVideoDurationSeconds(event.currentTarget.duration)} onEnded={() => setVideoDurationSeconds(videoRef.current?.duration ?? playbackSeconds)} />}</div> : <div className="black-frame">Add an MP4 anywhere inside this recording’s session folder to enable playback.</div>}</section>
     <section className="workspace"><aside className="signal-picker panel"><div><p className="eyebrow">Traces</p><strong>{traces.length} / {MAX_TRACES}</strong></div>{signals.map(signal => <label key={signal.id}><input type="checkbox" checked={selected.includes(signal.id)} onChange={() => toggle(signal.id)} />{signal.label}</label>)}</aside><section className="traces">{traces.length ? traces.map((signal, traceIndex) => <Trace key={signal.id} signal={signal} snapshots={recording.snapshots} startNs={startNs} endNs={endNs} color={COLORS[traceIndex]} />) : <p className="empty">Choose up to three numeric traces.</p>}</section><aside className="side"><Controller label="Driver 1" gamepad={gamepadFrame?.gamepad1 ?? null} /><Controller label="Driver 2" gamepad={gamepadFrame?.gamepad2 ?? null} /><section className="values panel"><p className="eyebrow">Current values</p>{snapshot ? Object.entries(snapshot.values).map(([id, value]) => <div key={id}><span>{recording.catalog?.signals.find(signal => signal.id === id)?.label ?? id}</span><output>{formatValue(value, recording.catalog?.signals.find(signal => signal.id === id)?.unit)}</output></div>) : <p>None</p>}</section></aside></section>
     {recording.invalidFrames > 0 && <p className="warning">Skipped {recording.invalidFrames} unsupported/corrupt frames while reading this recording.</p>}

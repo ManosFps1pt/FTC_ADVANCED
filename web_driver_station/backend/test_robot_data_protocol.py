@@ -79,6 +79,19 @@ class RobotDataProtocolTests(unittest.IsolatedAsyncioTestCase):
         writer.close(); await writer.wait_closed()
         self.assertEqual("9007199254740993", self.packets[-1].payload["data"]["values"]["arm.ticks"])
 
+    async def test_control_hub_highlight_is_preserved_on_the_decoded_snapshot(self) -> None:
+        _, writer = await asyncio.open_connection("127.0.0.1", self.port)
+        await self._send(writer, self._envelope(hello=wire.Hello(robot_id="robot", robot_name="Robot", op_mode_name="Test")))
+        await self._send(writer, self._envelope(schema=wire.Schema(revision=1, channels=[
+            wire.Channel(channel_id=1, key="drive.left.currentA", label="Current", quantity="current", unit="A", value_type=wire.FLOAT64, role=wire.MEASURED),
+        ])))
+        await self._send(writer, self._envelope(sample_batch=wire.SampleBatch(snapshots=[
+            wire.Snapshot(sample_sequence=1, schema_revision=1, highlighted=True, values=[wire.ChannelValue(channel_id=1, float64_value=2.0)]),
+        ])))
+        await asyncio.sleep(0.05)
+        writer.close(); await writer.wait_closed()
+        self.assertTrue(self.packets[-1].payload["data"]["highlighted"])
+
     async def test_server_can_send_a_framed_debug_request_back_to_robot(self) -> None:
         reader, writer = await asyncio.open_connection("127.0.0.1", self.port)
         await self._send(writer, self._envelope(hello=wire.Hello(

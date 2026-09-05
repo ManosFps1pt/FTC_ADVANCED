@@ -111,6 +111,9 @@ message Snapshot {
   uint64 sample_sequence = 1;
   uint32 schema_revision = 2;
   repeated ChannelValue values = 3;
+  // Control Hub-selected highlight. The laptop may apply a live local override
+  // when it creates its incident manifest, while retaining this raw value.
+  bool highlighted = 4;
 }
 
 message ChannelValue {

@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 from web_driver_station.backend.ftclog import RawFtcLogRecorder
+from web_driver_station.backend.incidents import IncidentRecorder
 from web_driver_station.backend.protocol import robot_data_pb2 as wire
 
 from .main import Recording, RecordingLibrary
@@ -69,6 +70,46 @@ class RecordingReaderTests(unittest.TestCase):
 
             self.assertEqual([complete_id], [item["id"] for item in recordings])
             self.assertEqual(1, recordings[0]["videoFileCount"])
+
+    def test_reads_incidents_and_telemetry_lab_command_confirmations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            recordings_root = Path(temporary_directory)
+            recorder = RawFtcLogRecorder(recordings_root)
+            session_id, connection_id = uuid.uuid4().bytes, uuid.uuid4().bytes
+            session_text = str(uuid.UUID(bytes=session_id))
+
+            def envelope(**body: object) -> bytes:
+                return wire.Envelope(
+                    protocol_version=2, session_id=session_id, connection_id=connection_id,
+                    connection_sequence=1, robot_elapsed_ns=123_000_000, **body,
+                ).SerializeToString()
+
+            recorder.append(session_text, envelope(hello=wire.Hello(robot_id="robot", robot_name="Replay Bot", op_mode_name="Test")), 1)
+            recorder.append(session_text, envelope(schema=wire.Schema(revision=1, channels=[
+                wire.Channel(channel_id=1, key="drive.speed", label="Speed", quantity="speed", unit="m/s", value_type=wire.FLOAT64, role=wire.MEASURED),
+            ])), 2)
+            recorder.append(session_text, envelope(sample_batch=wire.SampleBatch(snapshots=[
+                wire.Snapshot(sample_sequence=7, schema_revision=1, highlighted=False, values=[wire.ChannelValue(channel_id=1, float64_value=3.5)]),
+            ])), 3)
+            recorder.append(session_text, envelope(debug_command_response=wire.DebugCommandResponse(
+                request_id="run-1", command_id="motor.stop", result=wire.DEBUG_COMMAND_COMPLETED,
+                message="Output stopped", handled_at_robot_time_ns=123_000_000,
+            )), 4)
+            recorder.close_session(session_text)
+
+            incidents = IncidentRecorder(recordings_root)
+            incidents.observe_snapshot({
+                "sessionId": session_text, "sampleSequence": "7", "robotTimeNs": "123000000",
+                "highlighted": True, "highlightSource": "telemetry_lab",
+            })
+            incidents.close_session(session_text)
+
+            recording = Recording(recordings_root / session_text)
+            self.assertEqual(0, recording.invalid_frames)
+            self.assertTrue(recording.snapshots[0]["highlighted"])
+            self.assertEqual("telemetry_lab", recording.snapshots[0]["highlightSource"])
+            self.assertEqual("debug_command_response", recording.debug_messages[0]["type"])
+            self.assertEqual("motor.stop", recording.debug_messages[0]["commandId"])
 
 
 if __name__ == "__main__":

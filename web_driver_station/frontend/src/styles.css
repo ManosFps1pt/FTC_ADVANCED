@@ -61,6 +61,7 @@ label { display: grid; gap: .35rem; font-size: .8rem; font-weight: 700; color: #
 @media (max-width: 1050px) { .telemetry-dashboard { height: auto; min-height: 100dvh; overflow: visible; }.telemetry-editor { grid-template-columns: 1fr; overflow: visible; }.trace-stack { min-height: 22rem; }.trace-picker { max-height: 16rem; overflow: auto; }.controller-stack { min-height: 15rem; }.timeline-viewport { overflow-x: auto; } }
 
 .telemetry-dashboard { grid-template-rows: auto auto auto minmax(0, 1fr); }
+.capture-button { margin-left: auto; padding: .35rem .6rem; background: #7a3fc4; font-size: .72rem; }.capture-button:hover { background: #9658df; }.capture-button:disabled { background: #58327e; }
 .motor-monitor-section { padding: .75rem; }
 .motor-monitor-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: .55rem; }
 .motor-monitor-section-heading h2 { margin: .1rem 0 0; }

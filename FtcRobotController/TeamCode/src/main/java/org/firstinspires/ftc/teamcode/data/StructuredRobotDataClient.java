@@ -178,6 +178,15 @@ public final class StructuredRobotDataClient implements Closeable {
 
     /** Copies a complete snapshot and returns immediately. Encoding occurs on the worker. */
     public boolean publishSample(Map<String, ?> values) {
+        return publishSample(values, false);
+    }
+
+    /**
+     * Copies one complete snapshot with the Control Hub's selected incident state.
+     * The laptop may apply a live local override, but this original value remains
+     * in the raw recording for audit and later replay.
+     */
+    public boolean publishSample(Map<String, ?> values, boolean highlighted) {
         if (!running.get()) return false;
         Map<String, Object> copy = new LinkedHashMap<>();
         for (Map.Entry<String, ?> entry : values.entrySet()) copy.put(entry.getKey(), entry.getValue());
@@ -186,7 +195,7 @@ public final class StructuredRobotDataClient implements Closeable {
         long now = SystemClock.elapsedRealtimeNanos();
         long previous = lastLoopPublishNs.getAndSet(now);
         copy.put(LOOP_TIME_SIGNAL_ID, previous == 0 ? 0.0 : (now - previous) / 1_000_000.0);
-        return enqueue(new Sample(now, nextSample.getAndIncrement(), copy));
+        return enqueue(new Sample(now, nextSample.getAndIncrement(), copy, highlighted));
     }
 
     /**
@@ -194,15 +203,25 @@ public final class StructuredRobotDataClient implements Closeable {
      * and independently publishes the complete FTC gamepad state.
      */
     public boolean publishLoop(Map<String, ?> values, Gamepad gamepad1, Gamepad gamepad2) {
-        boolean sampleQueued = publishSample(values);
+        return publishLoop(values, gamepad1, gamepad2, false);
+    }
+
+    /** Publishes a loop snapshot and gamepads with the supplied incident state. */
+    public boolean publishLoop(Map<String, ?> values, Gamepad gamepad1, Gamepad gamepad2, boolean highlighted) {
+        boolean sampleQueued = publishSample(values, highlighted);
         boolean gamepadsQueued = publishGamepads(gamepad1, gamepad2);
         return sampleQueued && gamepadsQueued;
     }
 
     /** Captures all bound runtime, voltage, motor, and gamepad values and publishes one loop. */
     public boolean publishLoop() {
+        return publishLoop(false);
+    }
+
+    /** Captures configured values and gamepads with the supplied incident state. */
+    public boolean publishLoop(boolean highlighted) {
         if (!running.get()) return false;
-        boolean sampleQueued = publishSample(createDataSnapshot());
+        boolean sampleQueued = publishSample(createDataSnapshot(), highlighted);
         boolean gamepadsQueued = boundGamepad1 == null
                 ? true
                 : publishGamepads(boundGamepad1, boundGamepad2);
@@ -375,7 +394,7 @@ public final class StructuredRobotDataClient implements Closeable {
     private SampleBatch sampleBatch(List<Sample> samples) {
         SampleBatch.Builder batch = SampleBatch.newBuilder();
         for (Sample sample : samples) {
-            Snapshot.Builder snapshot = Snapshot.newBuilder().setSampleSequence(sample.sequence).setSchemaRevision(1);
+            Snapshot.Builder snapshot = Snapshot.newBuilder().setSampleSequence(sample.sequence).setSchemaRevision(1).setHighlighted(sample.highlighted);
             for (Signal signal : signals) snapshot.addValues(value(signal, sample.values.get(signal.id))); batch.addSnapshots(snapshot);
         }
         return batch.build();
@@ -445,7 +464,7 @@ public final class StructuredRobotDataClient implements Closeable {
 
     private interface Populator { void apply(Envelope.Builder envelope); }
     private interface Outbound { long robotTimeNs(); void apply(Envelope.Builder envelope); }
-    private static final class Sample implements Outbound { final long robotTimeNs, sequence; final Map<String, Object> values; Sample(long robotTimeNs, long sequence, Map<String, Object> values) { this.robotTimeNs = robotTimeNs; this.sequence = sequence; this.values = values; } public long robotTimeNs() { return robotTimeNs; } public void apply(Envelope.Builder ignored) { throw new UnsupportedOperationException("samples are batched"); } }
+    private static final class Sample implements Outbound { final long robotTimeNs, sequence; final Map<String, Object> values; final boolean highlighted; Sample(long robotTimeNs, long sequence, Map<String, Object> values, boolean highlighted) { this.robotTimeNs = robotTimeNs; this.sequence = sequence; this.values = values; this.highlighted = highlighted; } public long robotTimeNs() { return robotTimeNs; } public void apply(Envelope.Builder ignored) { throw new UnsupportedOperationException("samples are batched"); } }
     private static final class GamepadFrame implements Outbound { final long time; final GamepadSnapshot snapshot; GamepadFrame(long time, Gamepad one, Gamepad two) { this.time = time; snapshot = GamepadSnapshot.newBuilder().setGamepad1(gamepad(one)).setGamepad2(gamepad(two)).build(); } public long robotTimeNs() { return time; } public void apply(Envelope.Builder envelope) { envelope.setGamepad(snapshot); } }
     private static final class Message implements Outbound { final long time; final Envelope message; Message(long time, Envelope message) { this.time = time; this.message = message; } public long robotTimeNs() { return time; } public void apply(Envelope.Builder envelope) { envelope.mergeFrom(message); } }
     private static org.firstinspires.ftc.teamcode.data.protocol.Gamepad gamepad(Gamepad source) { return org.firstinspires.ftc.teamcode.data.protocol.Gamepad.newBuilder().setLeftStickX(source.left_stick_x).setLeftStickY(source.left_stick_y).setRightStickX(source.right_stick_x).setRightStickY(source.right_stick_y).setLeftTrigger(source.left_trigger).setRightTrigger(source.right_trigger).setA(source.a).setB(source.b).setX(source.x).setY(source.y).setDpadUp(source.dpad_up).setDpadDown(source.dpad_down).setDpadLeft(source.dpad_left).setDpadRight(source.dpad_right).setLeftBumper(source.left_bumper).setRightBumper(source.right_bumper).setLeftStickButton(source.left_stick_button).setRightStickButton(source.right_stick_button).setBack(source.back).setStart(source.start).setGuide(source.guide).build(); }

@@ -161,6 +161,47 @@ public  final class Snapshot extends
     values_.remove(index);
   }
 
+  public static final int HIGHLIGHTED_FIELD_NUMBER = 4;
+  private boolean highlighted_;
+  /**
+   * <pre>
+   * Control Hub-selected highlight. The laptop may apply a live local override
+   * when it creates its incident manifest, while retaining this raw value.
+   * </pre>
+   *
+   * <code>bool highlighted = 4;</code>
+   * @return The highlighted.
+   */
+  @java.lang.Override
+  public boolean getHighlighted() {
+    return highlighted_;
+  }
+  /**
+   * <pre>
+   * Control Hub-selected highlight. The laptop may apply a live local override
+   * when it creates its incident manifest, while retaining this raw value.
+   * </pre>
+   *
+   * <code>bool highlighted = 4;</code>
+   * @param value The highlighted to set.
+   */
+  private void setHighlighted(boolean value) {
+
+    highlighted_ = value;
+  }
+  /**
+   * <pre>
+   * Control Hub-selected highlight. The laptop may apply a live local override
+   * when it creates its incident manifest, while retaining this raw value.
+   * </pre>
+   *
+   * <code>bool highlighted = 4;</code>
+   */
+  private void clearHighlighted() {
+
+    highlighted_ = false;
+  }
+
   public static org.firstinspires.ftc.teamcode.data.protocol.Snapshot parseFrom(
       java.nio.ByteBuffer data)
       throws com.google.protobuf.InvalidProtocolBufferException {
@@ -416,6 +457,49 @@ public  final class Snapshot extends
       return this;
     }
 
+    /**
+     * <pre>
+     * Control Hub-selected highlight. The laptop may apply a live local override
+     * when it creates its incident manifest, while retaining this raw value.
+     * </pre>
+     *
+     * <code>bool highlighted = 4;</code>
+     * @return The highlighted.
+     */
+    @java.lang.Override
+    public boolean getHighlighted() {
+      return instance.getHighlighted();
+    }
+    /**
+     * <pre>
+     * Control Hub-selected highlight. The laptop may apply a live local override
+     * when it creates its incident manifest, while retaining this raw value.
+     * </pre>
+     *
+     * <code>bool highlighted = 4;</code>
+     * @param value The highlighted to set.
+     * @return This builder for chaining.
+     */
+    public Builder setHighlighted(boolean value) {
+      copyOnWrite();
+      instance.setHighlighted(value);
+      return this;
+    }
+    /**
+     * <pre>
+     * Control Hub-selected highlight. The laptop may apply a live local override
+     * when it creates its incident manifest, while retaining this raw value.
+     * </pre>
+     *
+     * <code>bool highlighted = 4;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearHighlighted() {
+      copyOnWrite();
+      instance.clearHighlighted();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:ftc.robotdata.v2.Snapshot)
   }
   @java.lang.Override
@@ -436,10 +520,11 @@ public  final class Snapshot extends
             "schemaRevision_",
             "values_",
             org.firstinspires.ftc.teamcode.data.protocol.ChannelValue.class,
+            "highlighted_",
           };
           java.lang.String info =
-              "\u0000\u0003\u0000\u0000\u0001\u0003\u0003\u0000\u0001\u0000\u0001\u0003\u0002\u000b" +
-              "\u0003\u001b";
+              "\u0000\u0004\u0000\u0000\u0001\u0004\u0004\u0000\u0001\u0000\u0001\u0003\u0002\u000b" +
+              "\u0003\u001b\u0004\u0007";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       // fall through
@@ -493,4 +578,3 @@ public  final class Snapshot extends
     return DEFAULT_INSTANCE.getParserForType();
   }
 }
-

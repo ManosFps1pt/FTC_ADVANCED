@@ -90,7 +90,8 @@ def decode(envelope: wire.Envelope, channel_keys: dict[int, tuple[str, int]]) ->
                 # because its browser API must retain every 64-bit value.
                 values[key] = str(raw) if raw is not None and value_type == wire.INT64 else raw
             records.append(_common(envelope, "sample", {
-                "sampleSequence": str(snapshot.sample_sequence), "schemaRevision": snapshot.schema_revision, "values": values,
+                "sampleSequence": str(snapshot.sample_sequence), "schemaRevision": snapshot.schema_revision,
+                "highlighted": snapshot.highlighted, "values": values,
             }))
         if not records:
             raise WireProtocolError("sample batch must not be empty")

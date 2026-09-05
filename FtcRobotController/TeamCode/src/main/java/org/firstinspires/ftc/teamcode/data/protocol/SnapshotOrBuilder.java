@@ -33,4 +33,15 @@ public interface SnapshotOrBuilder extends
    * <code>repeated .ftc.robotdata.v2.ChannelValue values = 3;</code>
    */
   int getValuesCount();
+
+  /**
+   * <pre>
+   * Control Hub-selected highlight. The laptop may apply a live local override
+   * when it creates its incident manifest, while retaining this raw value.
+   * </pre>
+   *
+   * <code>bool highlighted = 4;</code>
+   * @return The highlighted.
+   */
+  boolean getHighlighted();
 }

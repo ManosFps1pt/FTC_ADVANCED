@@ -3,11 +3,12 @@ import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useStat
 type DeviceDefinition = { id: string; label: string; subsystem: string; deviceType: string };
 type SignalDefinition = { id: string; label: string; deviceId?: string; quantity: string; unit: string; valueType: string; role?: string };
 type Catalog = { schemaRevision: number; devices: DeviceDefinition[]; signals: SignalDefinition[] };
-type Snapshot = { sampleSequence: string; robotTimeNs: string; values: Record<string, unknown> };
+type Snapshot = { sampleSequence: string; robotTimeNs: string; highlighted?: boolean; highlightSource?: "control_hub" | "telemetry_lab" | null; values: Record<string, unknown> };
 type GamepadState = { leftStickX: number; leftStickY: number; rightStickX: number; rightStickY: number; leftTrigger: number; rightTrigger: number; a: boolean; b: boolean; x: boolean; y: boolean; dpadUp: boolean; dpadDown: boolean; dpadLeft: boolean; dpadRight: boolean; leftBumper: boolean; rightBumper: boolean; leftStickButton: boolean; rightStickButton: boolean; back: boolean; start: boolean; guide: boolean };
 type GamepadFrame = { robotTimeNs: string; gamepad1: GamepadState; gamepad2: GamepadState };
 type SessionSummary = { snapshotCount: number; gamepadFrameCount: number; active: boolean };
-type TelemetryState = { session: SessionSummary | null; catalog: Catalog | null; snapshots: Snapshot[]; gamepadFrames: GamepadFrame[]; status: { lastError: string | null } };
+type CaptureState = { enabled: boolean; sessionId: string | null };
+type TelemetryState = { session: SessionSummary | null; catalog: Catalog | null; snapshots: Snapshot[]; gamepadFrames: GamepadFrame[]; status: { lastError: string | null }; capture?: CaptureState };
 type DriverStationStatus = { driver_station_error: string | null };
 type DebugCommandArgument = { id: string; label: string; description: string; valueType: string; required: boolean; unit?: string; min?: number; max?: number; enumOptions?: { id: string; label: string }[] };
 type DebugCommand = { id: string; label: string; description: string; requiresHumanAcknowledgement: boolean; arguments: DebugCommandArgument[] };
@@ -154,6 +155,7 @@ export function TelemetryDashboard({ topbar }: { topbar: ReactNode }) {
   const [commandValues, setCommandValues] = useState<Record<string, Record<string, CommandInputValue>>>({});
   const [commandBusy, setCommandBusy] = useState<Record<string, boolean>>({});
   const [commandFeedback, setCommandFeedback] = useState<Record<string, CommandFeedback>>({});
+  const [captureBusy, setCaptureBusy] = useState(false);
   const timelineRef = useRef<HTMLDivElement>(null);
   const pendingCommandKeysByRequestIdRef = useRef<Record<string, string>>({});
   // Older already-running backends may replace the browser request ID. Keep a
@@ -234,6 +236,7 @@ export function TelemetryDashboard({ topbar }: { topbar: ReactNode }) {
       else if (message.kind === "telemetry_catalog") setTelemetry((previous) => ({ ...previous, catalog: message.data as Catalog }));
       else if (message.kind === "telemetry_snapshot") setTelemetry((previous) => ({ ...previous, snapshots: [...previous.snapshots, message.data as Snapshot].slice(-MAX_HISTORY) }));
       else if (message.kind === "telemetry_gamepad") setTelemetry((previous) => ({ ...previous, gamepadFrames: [...previous.gamepadFrames, message.data as GamepadFrame].slice(-MAX_HISTORY) }));
+      else if (message.kind === "telemetry_capture") setTelemetry((previous) => ({ ...previous, capture: message.data as CaptureState }));
     };
     return () => { active = false; socket.close(); };
   }, []);
@@ -432,12 +435,29 @@ export function TelemetryDashboard({ topbar }: { topbar: ReactNode }) {
     }
   };
 
+  const toggleCapture = async () => {
+    const enabled = !telemetry.capture?.enabled;
+    setCaptureBusy(true);
+    try {
+      const response = await fetch("/api/data/telemetry/capture", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }),
+      });
+      const body = await response.json() as CaptureState & { detail?: string };
+      if (!response.ok) throw new Error(body.detail ?? "Could not change capture state");
+      setTelemetry((previous) => ({ ...previous, capture: body }));
+    } catch (error) {
+      setDriverStationError(error instanceof Error ? error.message : "Could not change capture state");
+    } finally {
+      setCaptureBusy(false);
+    }
+  };
+
   return <main className="telemetry-dashboard">
     {topbar}
     {driverStationError && <p className="telemetry-error"><strong>Robot Controller error:</strong> {driverStationError}</p>}
     {telemetry.status.lastError && <p className="telemetry-error">Latest telemetry packet rejected: {telemetry.status.lastError}</p>}
     <section className="tcp-command-panel panel"><div className="panel-heading"><div><p className="eyebrow">TCP command</p><strong>Robot functions</strong></div><span className={commands.length ? "alliance-ready" : ""}>{commands.length ? `${commands.length} READY` : "WAITING"}</span></div><p className="notice">Every function advertised by the running OpMode appears here with its typed arguments.</p>{commands.length ? <div className="command-card-list">{commands.map((command) => { const key = commandKey(command); return <CommandCard key={command.id} command={command} values={commandValues[key] ?? {}} busy={commandBusy[key] ?? false} feedback={commandFeedback[key]} onValueChange={(argumentId, value) => setCommandValue(command, argumentId, value)} onRun={() => void runCommand(command)} />; })}</div> : <p className="empty-state">Waiting for an OpMode to advertise its TCP functions.</p>}</section>
-    <section className="editor-timeline panel"><div><p className="eyebrow">Instant replay · {REPLAY_WINDOW_SECONDS}-second window</p><strong>{replaySnapshot ? `Starts at sample #${replaySnapshot.sampleSequence} · ${replaySnapshots.length} frames` : "Waiting for samples"}</strong><button className="secondary" type="button" disabled={!telemetry.snapshots.length} onClick={showLatest}>{followingLatest ? `Following latest ${REPLAY_WINDOW_SECONDS} s` : `Show latest ${REPLAY_WINDOW_SECONDS} s`}</button></div><div className="timeline-viewport" ref={timelineRef} onPointerDown={() => setFollowingLatest(false)} onScroll={onTimelineScroll} onWheel={(event) => { setFollowingLatest(false); if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) { event.currentTarget.scrollLeft += event.deltaY; event.preventDefault(); } }}><div className="timeline-track" style={{ width: `${timeline.width}px` }}>{Array.from({ length: Math.floor(timeline.durationSeconds) + 1 }, (_, second) => <span className="timeline-label" style={{ left: `${second * TIMELINE_PIXELS_PER_SECOND}px` }} key={second}>{second}s</span>)}{Array.from({ length: Math.floor(timeline.durationSeconds * TIMELINE_SUBDIVISIONS_PER_SECOND) + 1 }, (_, tick) => <i aria-hidden="true" className={`timeline-ruler-tick ${tick % TIMELINE_SUBDIVISIONS_PER_SECOND === 0 ? "major" : ""}`} style={{ left: `${tick / TIMELINE_SUBDIVISIONS_PER_SECOND * TIMELINE_PIXELS_PER_SECOND}px` }} key={tick} />)}</div></div></section>
+    <section className="editor-timeline panel"><div><p className="eyebrow">Instant replay · {REPLAY_WINDOW_SECONDS}-second window</p><strong>{replaySnapshot ? `Starts at sample #${replaySnapshot.sampleSequence} · ${replaySnapshots.length} frames` : "Waiting for samples"}</strong><button className="capture-button" type="button" disabled={!telemetry.snapshots.length || captureBusy} onClick={() => void toggleCapture()}>{telemetry.capture?.enabled ? "Capture override · ON" : "Capture override"}</button><button className="secondary" type="button" disabled={!telemetry.snapshots.length} onClick={showLatest}>{followingLatest ? `Following latest ${REPLAY_WINDOW_SECONDS} s` : `Show latest ${REPLAY_WINDOW_SECONDS} s`}</button></div><div className="timeline-viewport" ref={timelineRef} onPointerDown={() => setFollowingLatest(false)} onScroll={onTimelineScroll} onWheel={(event) => { setFollowingLatest(false); if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) { event.currentTarget.scrollLeft += event.deltaY; event.preventDefault(); } }}><div className="timeline-track" style={{ width: `${timeline.width}px` }}>{Array.from({ length: Math.floor(timeline.durationSeconds) + 1 }, (_, second) => <span className="timeline-label" style={{ left: `${second * TIMELINE_PIXELS_PER_SECOND}px` }} key={second}>{second}s</span>)}{Array.from({ length: Math.floor(timeline.durationSeconds * TIMELINE_SUBDIVISIONS_PER_SECOND) + 1 }, (_, tick) => <i aria-hidden="true" className={`timeline-ruler-tick ${tick % TIMELINE_SUBDIVISIONS_PER_SECOND === 0 ? "major" : ""}`} style={{ left: `${tick / TIMELINE_SUBDIVISIONS_PER_SECOND * TIMELINE_PIXELS_PER_SECOND}px` }} key={tick} />)}</div></div></section>
     <section className="motor-monitor-section panel"><div className="motor-monitor-section-heading"><div><p className="eyebrow">Live TCP stream</p><h2>Motor telemetry</h2></div><span>{motorDevices.length ? `${motorDevices.length} motors` : "Waiting for motor catalog"}</span></div>{motorDevices.length ? <div className="motor-monitor-grid">{motorDevices.map((device) => <MotorMonitor key={device.id} device={device} signals={telemetry.catalog?.signals ?? []} snapshot={latestSnapshot} />)}</div> : <p className="empty-state">Start an OpMode with DC motors to receive motor telemetry.</p>}</section>
     <section className="telemetry-editor"><aside className="trace-picker panel"><div><p className="eyebrow">Traces</p><strong>{traces.length} / {MAX_TRACES}</strong></div>{numericSignals.map((signal) => <label key={signal.id}><input type="checkbox" checked={selectedSignals.includes(signal.id)} onChange={() => toggleSignal(signal.id)} />{signal.label}</label>)}</aside><section className="trace-stack">{traces.length ? traces.map((signal, index) => <Trace key={signal.id} signal={signal} snapshots={replaySnapshots} windowStartNs={replaySnapshot ? snapshotTimeNs(replaySnapshot) : 0} color={TRACE_COLORS[index]} />) : <p className="empty-state">Choose a numeric trace.</p>}</section><aside className="controller-stack panel"><div><p className="eyebrow">Driver inputs</p><strong>{telemetry.session?.gamepadFrameCount ?? 0} frames</strong></div><ControllerMonitor title="Driver 1" state={replayGamepads?.gamepad1 ?? null} /><ControllerMonitor title="Driver 2" state={replayGamepads?.gamepad2 ?? null} /><LoopTimeMonitor snapshot={controllerSnapshot} /></aside></section>
   </main>;

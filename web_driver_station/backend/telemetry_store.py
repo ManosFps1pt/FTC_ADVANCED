@@ -206,6 +206,9 @@ class TelemetrySnapshot:
     robot_time_ns: str
     received_monotonic_ns: int
     received_at_ms: int
+    control_hub_highlighted: bool
+    highlighted: bool
+    highlight_source: str | None
     values: dict[str, Any]
 
     def to_wire(self) -> dict[str, Any]:
@@ -216,6 +219,9 @@ class TelemetrySnapshot:
             "robotTimeNs": self.robot_time_ns,
             "receivedMonotonicNs": str(self.received_monotonic_ns),
             "receivedAtMs": self.received_at_ms,
+            "controlHubHighlighted": self.control_hub_highlighted,
+            "highlighted": self.highlighted,
+            "highlightSource": self.highlight_source,
             "values": self.values,
         }
 
@@ -569,6 +575,15 @@ class TelemetryStore:
         if revision != session.catalog.revision:
             raise TelemetryProtocolError("sample schemaRevision does not match the active catalog")
         values = _require_object(data.get("values"), "sample.data.values")
+        control_hub_highlighted = data.get("controlHubHighlighted", data.get("highlighted", False))
+        highlighted = data.get("highlighted", False)
+        highlight_source = data.get("highlightSource")
+        if not isinstance(control_hub_highlighted, bool) or not isinstance(highlighted, bool):
+            raise TelemetryProtocolError("sample highlight values must be booleans")
+        if highlight_source is not None and highlight_source not in {"control_hub", "telemetry_lab"}:
+            raise TelemetryProtocolError("sample highlightSource is invalid")
+        if not highlighted:
+            highlight_source = None
         expected_ids = set(session.catalog.signals)
         received_ids = set(values)
         if received_ids != expected_ids:
@@ -591,6 +606,9 @@ class TelemetryStore:
             robot_time_ns=common["robotTimeNs"],
             received_monotonic_ns=received_monotonic_ns,
             received_at_ms=received_at_ms,
+            control_hub_highlighted=control_hub_highlighted,
+            highlighted=highlighted,
+            highlight_source=highlight_source,
             values=normalized,
         )
         session.snapshots.append(snapshot)

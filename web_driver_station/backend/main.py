@@ -42,6 +42,7 @@ from .telemetry_store import TelemetryProtocolError, TelemetryStore, TelemetryUp
 from .protocol import robot_data_pb2 as wire
 from .debug_commands import build_debug_command_request, command_request_id
 from .ftclog import FtcLogError, RawFtcLogRecorder
+from .incidents import IncidentError, IncidentRecorder
 from .recording_uploader import RecordingUploadError, RecordingUploader, UploadSettings
 from .video_recorder import CameraRecordingConfig, VideoRecorder, VideoRecorderError
 from .adb_camera import AdbCameraError, AdbCameraService
@@ -116,6 +117,10 @@ class DebugCommandHttpRequest(BaseModel):
     # arrives before the HTTP response can still be matched to its control.
     # It remains optional for compatibility with existing API callers.
     request_id: str | None = Field(default=None, min_length=1, max_length=80)
+
+
+class TelemetryCaptureRequest(BaseModel):
+    enabled: bool
 
 
 class RecordingUploadRequest(BaseModel):
@@ -458,6 +463,8 @@ class RobotDataService:
         self._connection_sessions: dict[tuple[str, int], str] = {}
         self._latest_packet: dict[str, Any] | None = None
         self._telemetry = TelemetryStore()
+        self._capture_override_enabled = False
+        self._capture_override_session_id: str | None = None
         self._debug_manifest: dict[str, Any] | None = None
         self._debug_ready: dict[str, Any] | None = None
         self._debug_tool_state: dict[str, Any] | None = None
@@ -471,6 +478,7 @@ class RobotDataService:
             os.getenv("ROBOT_DATA_RECORDINGS_DIR", str(Path(__file__).resolve().parents[1] / "recordings"))
         ).resolve()
         self._raw_recorder = RawFtcLogRecorder(recordings_root)
+        self._incident_recorder = IncidentRecorder(recordings_root)
         self._recording_uploader: RecordingUploader | None = None
         self._upload_states: dict[str, dict[str, Any]] = {}
         self._raw_finalized: set[str] = set()
@@ -515,6 +523,8 @@ class RobotDataService:
 
     async def close(self) -> None:
         await self._server.close()
+        if self._capture_override_session_id is not None:
+            await asyncio.to_thread(self._incident_recorder.close_session, self._capture_override_session_id)
         await asyncio.to_thread(self._raw_recorder.close_all)
         self._peers.clear()
         self._connection_ids.clear()
@@ -687,7 +697,9 @@ class RobotDataService:
         return envelope
 
     def telemetry_state(self) -> dict[str, Any]:
-        return self._telemetry.live_state()
+        state = self._telemetry.live_state()
+        state["capture"] = self.capture_status()
+        return state
 
     def telemetry_status(self) -> dict[str, Any]:
         """Return the bounded telemetry session summary."""
@@ -697,7 +709,22 @@ class RobotDataService:
     def telemetry_latest_state(self) -> dict[str, Any]:
         """Return bounded model-friendly telemetry without replay history."""
 
-        return self._telemetry.latest_state()
+        state = self._telemetry.latest_state()
+        state["capture"] = self.capture_status()
+        return state
+
+    def capture_status(self) -> dict[str, Any]:
+        return {
+            "enabled": self._capture_override_enabled,
+            "sessionId": self._capture_override_session_id,
+        }
+
+    async def set_capture_override(self, enabled: bool) -> dict[str, Any]:
+        if self._capture_override_session_id is None or self._active_peer is None:
+            raise RuntimeError("Telemetry capture requires an active robot-data session")
+        self._capture_override_enabled = enabled
+        await self._broadcast_telemetry(TelemetryUpdate("telemetry_capture", self.capture_status()))
+        return self.capture_status()
 
     def recording_sessions(self) -> list[dict[str, object]]:
         return self._raw_recorder.list_sessions()
@@ -746,12 +773,18 @@ class RobotDataService:
         is_hello = packet.envelope.WhichOneof("body") == "hello"
         resumed = is_hello and self._telemetry.has_session(packet.payloads[0].get("sessionId"))
         session_id = packet.payloads[0].get("sessionId")
+        if is_hello and isinstance(session_id, str) and session_id != self._capture_override_session_id:
+            if self._capture_override_session_id is not None:
+                await asyncio.to_thread(self._incident_recorder.close_session, self._capture_override_session_id)
+            self._capture_override_session_id = session_id
+            self._capture_override_enabled = False
         updates: list[TelemetryUpdate] = []
         structured_accepted = True
         for payload in packet.payloads:
+            effective_payload = self._effective_snapshot_highlight(payload)
             try:
                 updates.extend(self._telemetry.ingest(
-                    payload,
+                    effective_payload,
                     received_monotonic_ns=packet.received_monotonic_ns,
                     received_at_ms=self._latest_packet["received_at_ms"],
                 ))
@@ -764,6 +797,14 @@ class RobotDataService:
                 connection_id = payload.get("connectionId")
                 if isinstance(connection_id, str):
                     self._connection_ids[packet.peer] = connection_id
+        for update in updates:
+            if update.kind == "telemetry_snapshot":
+                try:
+                    await asyncio.to_thread(self._incident_recorder.observe_snapshot, dict(update.data))
+                except IncidentError:
+                    # The raw stream remains authoritative and uploadable if the
+                    # optional evidence index cannot be written.
+                    pass
         await self._broadcast_status()
         for update in updates:
             await self._broadcast_telemetry(update)
@@ -783,6 +824,27 @@ class RobotDataService:
             await self._finalize_recording(session_id)
             await self._stop_capture_for_session(session_id)
         return None
+
+    def _effective_snapshot_highlight(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Apply the laptop override without changing the archived RC protobuf."""
+
+        if payload.get("type") != "sample":
+            return dict(payload)
+        data = dict(payload.get("data", {}))
+        control_hub_highlighted = data.get("highlighted") is True
+        overrides_this_session = (
+            self._capture_override_enabled
+            and payload.get("sessionId") == self._capture_override_session_id
+        )
+        highlighted = True if overrides_this_session else control_hub_highlighted
+        data["controlHubHighlighted"] = control_hub_highlighted
+        data["highlighted"] = highlighted
+        data["highlightSource"] = "telemetry_lab" if overrides_this_session else (
+            "control_hub" if highlighted else None
+        )
+        result = dict(payload)
+        result["data"] = data
+        return result
 
     @staticmethod
     def _hello_ack(request: wire.Envelope, *, resumed: bool) -> wire.Envelope:
@@ -842,6 +904,9 @@ class RobotDataService:
     async def _finalize_recording(self, session_id: str) -> None:
         """Finalize telemetry, then wait for the operator's upload decision."""
 
+        await asyncio.to_thread(self._incident_recorder.close_session, session_id)
+        if session_id == self._capture_override_session_id:
+            self._capture_override_enabled = False
         try:
             final_path = await asyncio.to_thread(self._raw_recorder.close_session, session_id)
         except FtcLogError:
@@ -1178,6 +1243,14 @@ def get_latest_telemetry_state() -> dict[str, Any]:
     """Return the active session, catalog, latest snapshot, and recent events."""
 
     return robot_data_service.telemetry_latest_state()
+
+
+@app.post("/api/data/telemetry/capture")
+async def set_telemetry_capture(request: TelemetryCaptureRequest) -> dict[str, Any]:
+    try:
+        return await robot_data_service.set_capture_override(request.enabled)
+    except Exception as error:
+        raise _http_error(error) from error
 
 
 @app.get("/api/data/recordings")

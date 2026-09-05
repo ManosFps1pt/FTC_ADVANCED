@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -81,7 +82,9 @@ class Recording:
         self.snapshots: list[dict[str, Any]] = []
         self.gamepad_frames: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
+        self.debug_messages: list[dict[str, Any]] = []
         self.gaps: list[dict[str, Any]] = []
+        self.incidents: list[dict[str, Any]] = []
         self.log_files: list[str] = []
         self.invalid_frames = 0
         self.video_clips: list[Path] = []
@@ -97,7 +100,9 @@ class Recording:
             "snapshotCount": len(self.snapshots),
             "gamepadFrameCount": len(self.gamepad_frames),
             "eventCount": len(self.events),
+            "debugMessageCount": len(self.debug_messages),
             "gapCount": len(self.gaps),
+            "incidentCount": len(self.incidents),
             "startRobotTimeNs": start_ns,
             "endRobotTimeNs": end_ns,
             "logFiles": self.log_files,
@@ -114,7 +119,9 @@ class Recording:
             "snapshots": self.snapshots,
             "gamepadFrames": self.gamepad_frames,
             "events": self.events,
+            "debugMessages": self.debug_messages,
             "gaps": self.gaps,
+            "incidents": self.incidents,
         }
 
     def _load(self) -> None:
@@ -138,6 +145,8 @@ class Recording:
             path for path in self.session_directory.rglob("*.mp4")
             if path.is_file() and ".partial" not in path.name
         )
+        self.incidents = _load_incidents(self.session_directory)
+        _apply_incidents(self.snapshots, self.incidents)
 
     def video_path(self, index: int) -> Path:
         if not 0 <= index < len(self.video_clips):
@@ -164,11 +173,15 @@ class Recording:
             elif message_type == "catalog":
                 self.catalog = data
             elif message_type == "sample":
+                control_hub_highlighted = data.get("highlighted") is True
                 self.snapshots.append({
                     "sampleSequence": data["sampleSequence"],
                     "schemaRevision": data["schemaRevision"],
                     "robotTimeNs": payload["robotTimeNs"],
                     "receivedMonotonicNs": str(received_monotonic_ns),
+                    "controlHubHighlighted": control_hub_highlighted,
+                    "highlighted": control_hub_highlighted,
+                    "highlightSource": "control_hub" if control_hub_highlighted else None,
                     "values": data["values"],
                 })
             elif message_type == "gamepad":
@@ -181,6 +194,57 @@ class Recording:
                 self.events.append({"robotTimeNs": payload["robotTimeNs"], **data})
             elif message_type == "gap":
                 self.gaps.append({"robotTimeNs": payload["robotTimeNs"], **data})
+            elif message_type.startswith("debug_"):
+                self.debug_messages.append({"type": message_type, "robotTimeNs": payload["robotTimeNs"], **data})
+
+
+def _load_incidents(session_directory: Path) -> list[dict[str, Any]]:
+    """Read only fully finalized local incident manifests from a session."""
+
+    directory = session_directory / "incidents"
+    if not directory.is_dir():
+        return []
+    incidents: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict) or value.get("version") != 1:
+                continue
+            if (
+                not isinstance(value.get("id"), str)
+                or _sequence(value.get("firstSampleSequence")) is None
+                or not isinstance(value.get("segments"), list)
+            ):
+                continue
+            incidents.append(value)
+        except (OSError, ValueError, TypeError):
+            continue
+    return sorted(incidents, key=lambda item: _sequence(item.get("firstSampleSequence")) or -1)
+
+
+def _apply_incidents(snapshots: list[dict[str, Any]], incidents: list[dict[str, Any]]) -> None:
+    """Overlay saved effective-highlight segments without modifying raw packets."""
+
+    for incident in incidents:
+        for segment in incident.get("segments", []):
+            if not isinstance(segment, dict):
+                continue
+            source = segment.get("source")
+            first = _sequence(segment.get("firstSampleSequence"))
+            last = _sequence(segment.get("lastSampleSequence"))
+            if source not in {"control_hub", "telemetry_lab"} or first is None or last is None:
+                continue
+            for snapshot in snapshots:
+                sequence = _sequence(snapshot.get("sampleSequence"))
+                if sequence is not None and first <= sequence <= last:
+                    snapshot["highlighted"] = True
+                    snapshot["highlightSource"] = source
+
+
+def _sequence(value: Any) -> int | None:
+    if not isinstance(value, str) or not value.isdecimal():
+        return None
+    return int(value)
 
 
 def _resolve_recording_directory(value: Path) -> Path:
