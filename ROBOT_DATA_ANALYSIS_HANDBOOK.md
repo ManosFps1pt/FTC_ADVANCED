@@ -105,7 +105,9 @@ Hardware support and telemetry support are different. A hub may expose a sensor 
 
 Parse nanosecond timestamps as integers first. Subtract an origin before converting to floating-point seconds:
 
-$$t_i = (n_i-n_0)10^{-9},\qquad \Delta t_i=t_{i+1}-t_i.$$
+$$
+t_i = (n_i-n_0)10^{-9},\qquad \Delta t_i=t_{i+1}-t_i.
+$$
 
 Otherwise large absolute integers can lose precision in a JavaScript number. Encoder values serialized as decimal strings likewise need integer parsing before calibrated conversion. Never convert encoder ticks to meters without the encoder counts convention, gearing, and wheel geometry.
 
@@ -115,8 +117,10 @@ Associate every sample with its schema revision. Reject unit/meaning changes wit
 
 Construct **valid intervals**, not just a mask of valid rows. Both endpoints must be usable, the applicable schemas compatible, and the interval must not cross a known gap or reset. A maximum interpolation interval is analysis-specific. A proposed descriptive default is five times the median positive publication interval, reported in the output; controller identification requires a stricter experiment-specific gate. The default is not proof that an unmarked interval contains no missing samples.
 
-$$T_{\mathrm{valid}}=\sum_{i\in A}\Delta t_i,\qquad
-C_t=T_{\mathrm{valid}}/T_{\mathrm{requested}}.$$
+$$
+T_{\mathrm{valid}}=\sum_{i\in A}\Delta t_i,\qquad
+C_t=T_{\mathrm{valid}}/T_{\mathrm{requested}}.
+$$
 
 Report time coverage and sequence coverage separately. A small number of missing samples can span a large fraction of a short event. For multiple signals, use the intersection of their valid intervals.
 
@@ -160,8 +164,10 @@ Samples at 0, 0.02, 0.04, and 0.20 seconds contain a marked gap across the final
 
 Minimum voltage is simply the smallest accepted observation, with its timestamp. Sag is a change relative to a specified reference:
 
-$$S=V_{\mathrm{baseline}}-V_{\min},\qquad
-S_{\%}=100S/V_{\mathrm{baseline}}.$$
+$$
+S=V_{\mathrm{baseline}}-V_{\min},\qquad
+S_{\%}=100S/V_{\mathrm{baseline}}.
+$$
 
 For each load event, choose a nearby pre-event low-load interval and use a robust location estimate such as its median. Record its duration, spread, and load condition. It is a **low-load baseline**, not necessarily open-circuit voltage. Reject baselines that are already dipping or come from a different battery state. If no baseline exists, report the minimum and say sag is unavailable.
 
@@ -169,7 +175,9 @@ Detect events using a voltage-drop entry threshold, a smaller exit threshold, an
 
 Useful event measurements are depth, start/end, time below a configured voltage, and voltage-deficit area:
 
-$$A_V=\int_{\mathrm{event}}\max(0,V_b-V(t))\,dt\quad[\mathrm{V\,s}].$$
+$$
+A_V=\int_{\mathrm{event}}\max(0,V_b-V(t))\,dt\quad[\mathrm{V\,s}].
+$$
 
 This area describes voltage depression, **not energy**. Recovery time is measured from load release to sustained return within a declared band around the baseline. If the recording ends first, report “recovery not observed,” not a fabricated time.
 
@@ -177,11 +185,15 @@ This area describes voltage depression, **not energy**. Recovery time is measure
 
 A simplified short-time model is
 
-$$V_{\mathrm{hub}}(t)=V_{\mathrm{source}}(t)-I_{\mathrm{battery}}(t)R_{\mathrm{path}}-V_{\mathrm{dynamic}}(t).$$
+$$
+V_{\mathrm{hub}}(t)=V_{\mathrm{source}}(t)-I_{\mathrm{battery}}(t)R_{\mathrm{path}}-V_{\mathrm{dynamic}}(t).
+$$
 
 For a sufficiently fast, well-resolved load change with approximately unchanged source state:
 
-$$\hat R_{\mathrm{path}}\approx-\Delta V/\Delta I.$$
+$$
+\hat R_{\mathrm{path}}\approx-\Delta V/\Delta I.
+$$
 
 At the hub, this can include cells, connectors, switch, and wiring. It is not isolated cell resistance. A multi-event fit `V = a - R I` can improve robustness, but only if current changes independently enough to identify the slope, voltage and current are aligned, and slow state-of-charge/temperature trends are controlled. Report the pulse timescale: immediate and sustained voltage drops characterize different dynamics. Never divide by a current change near measurement noise.
 
@@ -213,13 +225,17 @@ A stable pre-event baseline is 12.8 V; the accepted dip minimum is 11.6 V. Sag i
 
 Physical instantaneous electrical power at a boundary is
 
-$$P(t)=V(t)I(t),\quad E=\int P(t)\,dt,\quad \bar P=E/T,\quad E_{\mathrm{Wh}}=E_{\mathrm{J}}/3600.$$
+$$
+P(t)=V(t)I(t),\quad E=\int P(t)\,dt,\quad \bar P=E/T,\quad E_{\mathrm{Wh}}=E_{\mathrm{J}}/3600.
+$$
 
 A watt is a joule per second. Average watts describe demand over a window; joules describe total energy over it. Average power is not the arithmetic mean of irregularly spaced samples. Average voltage times average current is not generally average power either, because voltage and current can covary.
 
 For synchronized point samples of power with an accepted linear interpolation model:
 
-$$E\approx\sum_{i\in A}\frac{P_i+P_{i+1}}{2}\Delta t_i.$$
+$$
+E\approx\sum_{i\in A}\frac{P_i+P_{i+1}}{2}\Delta t_i.
+$$
 
 The result is observed-interval energy when coverage is incomplete, not a full-run total. If physical bounds on missing power are known, report energy bounds separately; otherwise keep the missing contribution unknown. If sensors report interval averages rather than point samples, use their actual acquisition model.
 
@@ -269,7 +285,9 @@ Prefer task events to align phases: for example, command accepted → mechanism 
 
 For a metric `m`:
 
-$$\Delta m=m_B-m_A,\qquad \Delta m_{\%}=100(m_B-m_A)/m_A.$$
+$$
+\Delta m=m_B-m_A,\qquad \Delta m_{\%}=100(m_B-m_A)/m_A.
+$$
 
 If the baseline is zero or close to resolution, return the absolute difference and omit the percentage. State whether lower is desirable; lower current during a failed lift is not success.
 
@@ -302,15 +320,19 @@ Five matched task-energy differences in joules are `[-80,-100,-60,-90,-70]`. The
 
 A reference is the desired position or speed; control effort is the command sent to the actuator. Define `e(t)=r(t)-y(t)` in one physical coordinate system. Useful time-weighted metrics are:
 
-$$\mathrm{MAE}=\frac1T\int|e|dt,\quad
+$$
+\mathrm{MAE}=\frac1T\int|e|dt,\quad
 \mathrm{RMSE}=\sqrt{\frac1T\int e^2dt},\quad
-\mathrm{IAE}=\int|e|dt.$$
+\mathrm{IAE}=\int|e|dt.
+$$
 
 MAE measures typical error; RMSE penalizes larger excursions more strongly; IAE combines error and duration. Record the quadrature convention for transformed signals such as `e^2`. A signed mean can hide alternating positive and negative errors, so report it only alongside absolute measures.
 
 For an isolated step from `r0` to `r1`, set `d = sign(r1-r0)` and `A = abs(r1-r0)`:
 
-$$\mathrm{overshoot}_{\%}=100\max(0,\max_t[d(y(t)-r_1)])/A.$$
+$$
+\mathrm{overshoot}_{\%}=100\max(0,\max_t[d(y(t)-r_1)])/A.
+$$
 
 This handles upward and downward steps. Percentage overshoot is undefined for zero-amplitude steps. Choose a minimum meaningful step amplitude above noise before detecting steps.
 
@@ -347,7 +369,9 @@ A 0→1000 ticks/s step peaks at 1080 ticks/s: **8% overshoot**. It crosses 100 
 
 A continuous parallel PID expression is
 
-$$u(t)=u_{\mathrm{ff}}(t)+K_Pe(t)+K_I\int e(t)dt+K_D\frac{de}{dt}.$$
+$$
+u(t)=u_{\mathrm{ff}}(t)+K_Pe(t)+K_I\int e(t)dt+K_D\frac{de}{dt}.
+$$
 
 Proportional action responds to error, integral action accumulates it, and derivative action responds to its rate of change. Feedforward supplies a predicted input from desired motion or load. These concepts are introduced in [WPILib PID](https://docs.wpilib.org/en/stable/docs/software/advanced-controls/introduction/introduction-to-pid.html) and [feedforward control](https://docs.wpilib.org/en/latest/docs/software/advanced-controls/controllers/feedforward.html). The implementation below is a proposed explicit convention, not a claim about FTC firmware internals.
 
@@ -386,7 +410,9 @@ System identification means estimating how input causes state to evolve. Unlike 
 
 A useful candidate model for a motor-driven mechanism is
 
-$$V=k_S\operatorname{sgn}(v)+k_Vv+k_Aa+g(q).$$
+$$
+V=k_S\operatorname{sgn}(v)+k_Vv+k_Aa+g(q).
+$$
 
 Here `k_S` represents an approximate friction voltage, `k_V` speed-dependent voltage, `k_A` acceleration-dependent voltage, and `g(q)` gravity compensation. An elevator may use a constant gravity term; an arm can require an angle-dependent term such as `k_G cos(q)` with a documented angle origin. Do not force this linear-in-parameters model onto backlash, changing contact, or strongly varying geometry without testing residuals.
 
@@ -404,16 +430,22 @@ Model validation includes held-out trajectory prediction, residual structure, co
 
 Suppose validated synthetic velocity dynamics are
 
-$$k_A\dot v+k_Vv=u,\quad k_A=0.002\ \mathrm{V/(ticks/s^2)},\quad
-k_V=0.020\ \mathrm{V/(ticks/s)}.$$
+$$
+k_A\dot v+k_Vv=u,\quad k_A=0.002\ \mathrm{V/(ticks/s^2)},\quad
+k_V=0.020\ \mathrm{V/(ticks/s)}.
+$$
 
 For a constant target, use velocity feedforward plus proportional feedback:
 
-$$u=k_Vr+K_P(r-v).$$
+$$
+u=k_Vr+K_P(r-v).
+$$
 
 Substitution gives `k_A * de/dt = -(k_V + K_P)e`, so the ideal error time constant is
 
-$$\tau=\frac{k_A}{k_V+K_P},\qquad K_P=\frac{k_A}{\tau}-k_V.$$
+$$
+\tau=\frac{k_A}{k_V+K_P},\qquad K_P=\frac{k_A}{\tau}-k_V.
+$$
 
 For a chosen `tau = 0.05 s`, **K_P = 0.020 V/(ticks/s)**. At a target of 200 ticks/s from rest, feedforward is 4 V and initial feedback is 4 V: total **8 V**, within a hypothetical 10 V effort limit. The ideal unsaturated model reaches 2% error after `-tau*ln(0.02) = 0.1956 s`.
 
@@ -423,8 +455,10 @@ This is a **P plus feedforward candidate**, not a claim that every controller ne
 
 For more complex plants, simulate a bounded set of candidates on the validated model before testing. Use a declared objective, for example
 
-$$J=w_e\frac{\mathrm{IAE}}{E_0T_0}+w_t\frac{t_s}{T_0}
-+w_u\frac{1}{T U_0^2}\int u^2dt.$$
+$$
+J=w_e\frac{\mathrm{IAE}}{E_0T_0}+w_t\frac{t_s}{T_0}
++w_u\frac{1}{T U_0^2}\int u^2dt.
+$$
 
 The normalizers make the terms dimensionless; the weights express task preferences. Electrical energy is not generally `integral(u²)`: that term is an effort penalty. Apply hard rejection constraints for overshoot, current, travel, duration, and failed completion before ranking feasible candidates. A penalty score must never trade a violated physical limit for a faster response.
 
@@ -465,13 +499,17 @@ The backend remains authoritative for ownership, command validation, and authori
 
 A candidate stall can be defined as sustained command demand, low speed, and elevated current:
 
-$$|u|>u_{\min}\ \land\ |v|<v_{\min}\ \land\ I>I_{\mathrm{high}}.$$
+$$
+|u|>u_{\min}\ \land\ |v|<v_{\min}\ \land\ I>I_{\mathrm{high}}.
+$$
 
 Require a configurable persistence interval and exclude intended holding, disabled states, and known end stops. Thresholds depend on the motor, gearing, load, sensor resolution, and allowed task. Record each condition separately so a reviewer can inspect why it triggered. With low speed but no current measurement, say “low response to command,” not “confirmed stall.”
 
 Drivetrain asymmetry should be evaluated only in comparable maneuvers. With calibrated forward velocity signs, a normalized difference is
 
-$$A_v=\frac{v_L-v_R}{\max((|v_L|+|v_R|)/2,v_{\mathrm{floor}})}.$$
+$$
+A_v=\frac{v_L-v_R}{\max((|v_L|+|v_R|)/2,v_{\mathrm{floor}})}.
+$$
 
 Require straight-motion intent and speeds above a useful floor. A turning command intentionally creates asymmetry. Compare current at matched speed/load as well as speed at matched command. Wheel radius, gear ratio, reversal configuration, and encoder counts must be consistent.
 
@@ -510,7 +548,9 @@ Separately measure actual loop execution using robot-local timestamps around the
 
 Let robot timestamp be `t_r` and laptop receipt time be `t_l`. Their difference is not one-way latency without clock calibration. A model is
 
-$$t_l=a t_r+b+d(t),$$
+$$
+t_l=a t_r+b+d(t),
+$$
 
 where `a` captures relative clock rate, `b` clock origin, and `d(t)` transmission/queueing delay. With only one-way observations, constant delay and clock offset are confounded. An estimated lower-envelope clock mapping can reveal relative delay excursions under assumptions, but not absolute latency. Re-estimate across relevant clock epochs and report synchronization uncertainty.
 
@@ -545,16 +585,23 @@ Use a finite-state task model with recorded transitions, for example `idle → a
 
 If events are unavailable, use threshold/hysteresis segmentation on observed signals and mark the boundaries as inferred. A gamepad button press shows operator intent, not successful acquisition. A servo command shows a requested state, not the physical arrival of the mechanism.
 
-$$T_{\mathrm{cycle}}=t_{\mathrm{end}}-t_{\mathrm{start}},\qquad
-p_{\mathrm{success}}=N_{\mathrm{success}}/N_{\mathrm{attempts}}.$$
+$$
+T_{\mathrm{cycle}}=t_{\mathrm{end}}-t_{\mathrm{start}},\qquad
+p_{\mathrm{success}}=N_{\mathrm{success}}/N_{\mathrm{attempts}}.
+$$
 
 Use a binomial interval only when the trial-independence assumptions are reasonable; repeated cycles within one run can share conditions. For energy productivity, `total attempt energy / number of successes` includes unsuccessful attempts. Also report success rate so a ratio does not hide failures. If there are no successes, the ratio is unavailable.
 
 For trajectory tracking with desired pose `(x_d,y_d,theta_d)` and estimated pose `(x,y,theta)`, rotate position error into the desired heading frame:
 
-$$e_{\parallel}=\cos\theta_d(x-x_d)+\sin\theta_d(y-y_d),$$
-$$e_{\perp}=-\sin\theta_d(x-x_d)+\cos\theta_d(y-y_d),\qquad
-e_\theta=\operatorname{wrap}(\theta-\theta_d).$$
+$$
+e_{\parallel}=\cos\theta_d(x-x_d)+\sin\theta_d(y-y_d),
+$$
+
+$$
+e_{\perp}=-\sin\theta_d(x-x_d)+\cos\theta_d(y-y_d),\qquad
+e_\theta=\operatorname{wrap}(\theta-\theta_d).
+$$
 
 Time-indexed errors reveal schedule tracking. Nearest-path cross-track error answers a different question and must use progress constraints to avoid matching the wrong branch at a self-intersection. Endpoint repeatability is the distribution of endpoints across trials. Accuracy requires independent ground truth: an estimator can consistently report the same wrong endpoint.
 
@@ -584,7 +631,9 @@ Always mask angles and latency using validity. The producer writes zero when a t
 
 With bounded state-hold intervals, compute
 
-$$\mathrm{availability}=T_{\mathrm{valid\ target}}/T_{\mathrm{observed}},$$
+$$
+\mathrm{availability}=T_{\mathrm{valid\ target}}/T_{\mathrm{observed}},
+$$
 
 along with longest observed dropout, reacquisition times, and valid-only angular summaries. Treat unobserved gaps separately from explicit no-target states. Without unique frame IDs, this is availability of the **reported state**, not the fraction of independent camera frames that detected a target.
 
@@ -634,7 +683,9 @@ Do not invent a single numeric “confidence” by combining arbitrary scores. R
 
 A robust exploratory score for a metric within a matched operating regime is
 
-$$z_{\mathrm{robust}}=\frac{x-\operatorname{median}(X)}{1.4826\operatorname{MAD}(X)}.$$
+$$
+z_{\mathrm{robust}}=\frac{x-\operatorname{median}(X)}{1.4826\operatorname{MAD}(X)}.
+$$
 
 The scale factor aligns MAD with standard deviation for an approximately normal distribution. It does not turn the result into a calibrated fault probability. If MAD is zero or below sensor resolution, use a documented physical tolerance or declare the score unavailable.
 
