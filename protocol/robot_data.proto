@@ -35,6 +35,11 @@ message Envelope {
     DebugCommandRequest debug_command_request = 27;
     DebugCommandResponse debug_command_response = 28;
     DebugSafetyState debug_safety_state = 29;
+    DebugRunStatus debug_run_status = 30;
+    DebugRunHeader debug_run_header = 31;
+    DebugRunChunk debug_run_chunk = 32;
+    DebugRunEnd debug_run_end = 33;
+    DebugRunAck debug_run_ack = 34;
   }
 }
 
@@ -52,6 +57,7 @@ message HelloAck {
   uint64 server_time_ns = 2;
   bool session_resumed = 3;
   string reason = 4;
+  repeated string capabilities = 5;
 }
 
 message Schema {
@@ -264,6 +270,71 @@ message DebugToolReady {
   repeated string telemetry_channel_ids = 6;
   DebugSessionState state = 7;
   string message = 8;
+  repeated DebugBenchmarkDefinition benchmarks = 9;
+}
+
+// A benchmark is a robot procedure producing an immutable, run-scoped dataset.
+message DebugBenchmarkDefinition {
+  string id = 1;
+  uint32 version = 2;
+  string label = 3;
+  string description = 4;
+  repeated DebugCommandArgumentDefinition inputs = 5;
+  repeated Channel channels = 6;
+  repeated string analyzer_ids = 7;
+  bool reverse_allowed = 8;
+  double max_voltage = 9;
+}
+
+message DebugRunStatus {
+  string run_id = 1;
+  string state = 2;
+  string phase = 3;
+  uint32 repetition = 4;
+  sint32 direction = 5;
+  string message = 6;
+}
+
+message DebugRunHeader {
+  string run_id = 1;
+  string mechanism_id = 2;
+  string mechanism_label = 3;
+  string motor_name = 4;
+  DebugBenchmarkDefinition benchmark = 5;
+  repeated DebugCommandArgumentValue inputs = 6;
+  double ticks_per_revolution = 7; // Zero means calibration unavailable.
+  uint64 started_robot_ns = 8;
+  double max_power = 9;
+  double current_limit_amps = 10;
+}
+
+message DebugRunSample {
+  uint32 sequence = 1;
+  uint64 robot_time_ns = 2;
+  string phase = 3;
+  uint32 repetition = 4;
+  sint32 direction = 5;
+  uint32 operating_point = 6;
+  repeated ChannelValue values = 7;
+}
+
+message DebugRunChunk {
+  string run_id = 1;
+  uint32 chunk_index = 2;
+  repeated DebugRunSample samples = 3;
+}
+
+message DebugRunEnd {
+  string run_id = 1;
+  uint32 total_samples = 2;
+  uint32 total_chunks = 3;
+  string outcome = 4;
+  string message = 5;
+}
+
+message DebugRunAck {
+  string run_id = 1;
+  uint32 total_samples = 2;
 }
 
 message DebugParameter {

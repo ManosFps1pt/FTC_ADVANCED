@@ -1,9 +1,9 @@
 # FTC Advanced MCP server
 
-This is the first, deliberately read-only MCP integration. It exposes bounded
-live status from the existing Web Driver Station backend and does not expose
-recording replay, video, configuration writes, OpMode lifecycle commands, or
-robot-control commands.
+This MCP integration exposes bounded live status plus a deliberately narrow
+Debugger control surface. It does not expose recording replay, video,
+configuration writes, arbitrary OpMode lifecycle commands, drivetrain control,
+or mechanism control.
 
 ## Tools
 
@@ -13,9 +13,25 @@ robot-control commands.
 - `get_latest_telemetry_snapshot` — one latest sample plus at most ten recent events.
 - `get_telemetry_catalog` — signal names, units, devices, and roles.
 - `get_debugger_status` — debugger manifest, selected tool, and safety state.
+- `list_available_opmodes` / `launch_opmode` — inspect and launch an exact
+  Robot Controller-advertised user OpMode. Internal FTC stop sentinels cannot
+  be launched.
+- `stop_opmode` — stop the active user OpMode through the Driver Station.
+- `launch_debugger_opmode` — launches only `FTC Advanced Debugger`.
+- `discover_debugger_functionality` — live manifest, selected-tool schema,
+  safety state, and advertised benchmark inputs.
+- `select_free_spin_tool` — selects an enabled manifest-advertised free-spin tool.
+- `set_free_spin_motor_power` / `stop_free_spin_motor` — bounded free-spin
+  control. Power is capped at ±0.35 and expires after at most 500 ms.
+- `run_friction_benchmark` — starts the selected friction benchmark.
+- `list_friction_benchmark_runs` / `get_friction_benchmark_result` — inspect
+  execution status and the completed analyzed report.
 
-All tools are annotated as read-only. The annotations are hints for clients,
-not a replacement for network authentication or backend authorization.
+The control tools validate the live manifest and permit only enabled
+`debug_free_spin` tool leaves. The backend and robot remain authoritative for
+tool-instance checks, schema validation, output limits, watchdog expiry, and
+benchmark safety. MCP annotations are hints for clients, not a replacement for
+network authentication or backend authorization.
 
 ## Local installation
 
@@ -78,12 +94,13 @@ The tunnel client must remain running while ChatGPT uses the app. The tunnel
 documentation says it uses outbound HTTPS and does not require inbound public
 access to the laptop.
 
-Enable only the six read-only tools. After connecting, ask:
+After connecting, ask:
 
 ```text
-Use the FTC Advanced tools to report the Driver Station state,
-telemetry session state, and latest telemetry sample. If the backend is
-offline, say so instead of inferring robot state.
+Use the FTC Advanced tools to discover the Debugger. Launch only the FTC
+Advanced Debugger OpMode, select only an enabled free-spin tool, and report
+its safety state before using any actuator control. For a friction benchmark,
+return the run ID and retrieve the result once it is complete.
 ```
 
 If ChatGPT reports a `421 Misdirected Request`, the tunnel's public hostname

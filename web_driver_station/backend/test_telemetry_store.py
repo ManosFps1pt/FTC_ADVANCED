@@ -146,6 +146,55 @@ class TelemetryStoreTests(unittest.TestCase):
         self.assertTrue(replay[0]["gamepad1"]["a"])
         self.assertTrue(replay[0]["gamepad2"]["b"])
 
+    def test_pose2d_snapshot_is_preserved_for_field_rendering(self) -> None:
+        self.store.ingest(
+            self.envelope("hello", {"robotId": "ftc-1", "robotName": "Test Robot", "opModeName": "Test"}),
+            received_monotonic_ns=1,
+        )
+        self.store.ingest(
+            self.envelope("catalog", {
+                "schemaRevision": 1,
+                "devices": [{"id": "localization", "label": "Localization", "subsystem": "localization", "deviceType": "pose estimator"}],
+                "signals": [{"id": "localization.pose", "label": "Localization Pose", "deviceId": "localization", "quantity": "pose", "unit": "in,rad", "valueType": "pose2d", "role": "measured"}],
+            }),
+            received_monotonic_ns=2,
+        )
+        self.store.ingest(
+            self.envelope("sample", {
+                "sampleSequence": "0", "schemaRevision": 1,
+                "values": {"localization.pose": {"x": 24.0, "y": 48.0, "headingRad": 0.5}},
+            }),
+            received_monotonic_ns=3,
+        )
+        self.assertEqual(
+            {"x": 24.0, "y": 48.0, "headingRad": 0.5},
+            self.store.live_state()["snapshots"][0]["values"]["localization.pose"],
+        )
+
+    def test_pose2d_snapshot_rejects_missing_or_non_finite_coordinates(self) -> None:
+        self.store.ingest(
+            self.envelope("hello", {"robotId": "ftc-1", "robotName": "Test Robot", "opModeName": "Test"}),
+            received_monotonic_ns=1,
+        )
+        self.store.ingest(
+            self.envelope("catalog", {
+                "schemaRevision": 1,
+                "devices": [],
+                "signals": [{"id": "localization.pose", "label": "Localization Pose", "quantity": "pose", "unit": "in,rad", "valueType": "pose2d", "role": "measured"}],
+            }),
+            received_monotonic_ns=2,
+        )
+        with self.assertRaises(TelemetryProtocolError):
+            self.store.ingest(
+                self.envelope("sample", {"sampleSequence": "0", "schemaRevision": 1, "values": {"localization.pose": {"x": 1.0, "y": 2.0}}}),
+                received_monotonic_ns=3,
+            )
+        with self.assertRaises(TelemetryProtocolError):
+            self.store.ingest(
+                self.envelope("sample", {"sampleSequence": "1", "schemaRevision": 1, "values": {"localization.pose": {"x": 1.0, "y": float("inf"), "headingRad": 0.0}}}),
+                received_monotonic_ns=4,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

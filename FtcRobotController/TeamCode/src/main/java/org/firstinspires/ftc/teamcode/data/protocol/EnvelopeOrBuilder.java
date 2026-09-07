@@ -266,5 +266,60 @@ public interface EnvelopeOrBuilder extends
    */
   org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState getDebugSafetyState();
 
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunStatus debug_run_status = 30;</code>
+   * @return Whether the debugRunStatus field is set.
+   */
+  boolean hasDebugRunStatus();
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunStatus debug_run_status = 30;</code>
+   * @return The debugRunStatus.
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugRunStatus getDebugRunStatus();
+
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunHeader debug_run_header = 31;</code>
+   * @return Whether the debugRunHeader field is set.
+   */
+  boolean hasDebugRunHeader();
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunHeader debug_run_header = 31;</code>
+   * @return The debugRunHeader.
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugRunHeader getDebugRunHeader();
+
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunChunk debug_run_chunk = 32;</code>
+   * @return Whether the debugRunChunk field is set.
+   */
+  boolean hasDebugRunChunk();
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunChunk debug_run_chunk = 32;</code>
+   * @return The debugRunChunk.
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugRunChunk getDebugRunChunk();
+
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunEnd debug_run_end = 33;</code>
+   * @return Whether the debugRunEnd field is set.
+   */
+  boolean hasDebugRunEnd();
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunEnd debug_run_end = 33;</code>
+   * @return The debugRunEnd.
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugRunEnd getDebugRunEnd();
+
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunAck debug_run_ack = 34;</code>
+   * @return Whether the debugRunAck field is set.
+   */
+  boolean hasDebugRunAck();
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunAck debug_run_ack = 34;</code>
+   * @return The debugRunAck.
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugRunAck getDebugRunAck();
+
   public org.firstinspires.ftc.teamcode.data.protocol.Envelope.BodyCase getBodyCase();
 }

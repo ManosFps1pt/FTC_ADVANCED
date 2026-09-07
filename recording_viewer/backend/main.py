@@ -17,6 +17,8 @@ from fastapi.staticfiles import StaticFiles
 from google.protobuf.message import DecodeError
 
 from web_driver_station.backend.ftclog import FtcLogError, iter_records
+from web_driver_station.backend.debugger_results import DebuggerResults
+from web_driver_station.backend.debugger_api import install_result_reads
 from web_driver_station.backend.protocol import robot_data_pb2 as wire
 from web_driver_station.backend.protocol_codec import WireProtocolError, decode
 
@@ -43,6 +45,11 @@ class RecordingLibrary:
             except ValueError:
                 continue
             raw_path = session_path / "raw"
+            try:
+                if json.loads((session_path/"manifest.json").read_text(encoding="utf-8")).get("kind") == "debugger":
+                    continue
+            except (OSError, ValueError):
+                pass
             log_paths = sorted(raw_path.glob("stream-*.ftclog")) if raw_path.is_dir() else []
             # A session becomes public only after the uploader's final rename,
             # and a completed log must be present.  Partial files are never a
@@ -296,6 +303,7 @@ def create_library_app(recordings_root: Path) -> FastAPI:
 
     library = RecordingLibrary(recordings_root)
     app = FastAPI(title="FTC Recording Viewer", docs_url=None, redoc_url=None)
+    install_result_reads(app, DebuggerResults(recordings_root))
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:5174", "http://localhost:5174"],

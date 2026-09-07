@@ -37,6 +37,7 @@ sudo sed "s/__PUBLIC_IP__/$public_ip/g" /opt/ftc-recording-viewer/recording_view
 sudo nginx -t
 sudo systemctl reload nginx
 sudo ufw allow 443/tcp
+sudo install -m 0755 /opt/ftc-recording-viewer/recording_viewer/deploy/reload_nginx_after_renewal.sh /etc/letsencrypt/renewal-hooks/deploy/ftc-recording-viewer-nginx
 printf '%s\n' '17 */12 * * * root /snap/bin/certbot renew --quiet --preferred-profile shortlived' | sudo tee /etc/cron.d/ftc-recording-viewer-certbot >/dev/null
 sudo chmod 0644 /etc/cron.d/ftc-recording-viewer-certbot
 echo "FTC_VIEWER_USERNAME=$viewer_username"

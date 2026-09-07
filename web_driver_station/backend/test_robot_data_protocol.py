@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import struct
 import unittest
 import uuid
@@ -78,6 +79,39 @@ class RobotDataProtocolTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.05)
         writer.close(); await writer.wait_closed()
         self.assertEqual("9007199254740993", self.packets[-1].payload["data"]["values"]["arm.ticks"])
+
+    async def test_pose2d_is_normalized_for_the_dashboard(self) -> None:
+        _, writer = await asyncio.open_connection("127.0.0.1", self.port)
+        await self._send(writer, self._envelope(hello=wire.Hello(robot_id="robot", robot_name="Robot", op_mode_name="Test")))
+        await self._send(writer, self._envelope(schema=wire.Schema(revision=1, channels=[
+            wire.Channel(channel_id=1, key="localization.pose", label="Localization Pose", quantity="pose", unit="in,rad", value_type=wire.POSE2D, role=wire.MEASURED),
+        ])))
+        await self._send(writer, self._envelope(sample_batch=wire.SampleBatch(snapshots=[
+            wire.Snapshot(sample_sequence=1, schema_revision=1, values=[
+                wire.ChannelValue(channel_id=1, pose2d_value=wire.Pose2d(x=24.5, y=111.25, heading_rad=1.57079632679)),
+            ]),
+        ])))
+        await asyncio.sleep(0.05)
+        writer.close(); await writer.wait_closed()
+        self.assertEqual(
+            {"x": 24.5, "y": 111.25, "headingRad": 1.57079632679},
+            self.packets[-1].payload["data"]["values"]["localization.pose"],
+        )
+
+    async def test_non_finite_pose2d_is_unavailable(self) -> None:
+        _, writer = await asyncio.open_connection("127.0.0.1", self.port)
+        await self._send(writer, self._envelope(hello=wire.Hello(robot_id="robot", robot_name="Robot", op_mode_name="Test")))
+        await self._send(writer, self._envelope(schema=wire.Schema(revision=1, channels=[
+            wire.Channel(channel_id=1, key="localization.pose", label="Localization Pose", quantity="pose", unit="in,rad", value_type=wire.POSE2D, role=wire.MEASURED),
+        ])))
+        await self._send(writer, self._envelope(sample_batch=wire.SampleBatch(snapshots=[
+            wire.Snapshot(sample_sequence=1, schema_revision=1, values=[
+                wire.ChannelValue(channel_id=1, pose2d_value=wire.Pose2d(x=24.5, y=math.nan, heading_rad=0.0)),
+            ]),
+        ])))
+        await asyncio.sleep(0.05)
+        writer.close(); await writer.wait_closed()
+        self.assertIsNone(self.packets[-1].payload["data"]["values"]["localization.pose"])
 
     async def test_control_hub_highlight_is_preserved_on_the_decoded_snapshot(self) -> None:
         _, writer = await asyncio.open_connection("127.0.0.1", self.port)

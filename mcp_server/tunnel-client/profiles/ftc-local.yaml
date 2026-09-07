@@ -2,7 +2,8 @@ config_version: 1
 control_plane:
   base_url: "https://api.openai.com"
 
-  tunnel_id: "tunnel_6a91a3295e3c8191b56732df4809f9f4"
+  tunnel_id: "tunnel_6a9f2819ba4881918172eb3137852fdc"
+  organization_id: "org-S7nBsj5zeWVMiG2ntYiXSQYz"
   api_key: "env:CONTROL_PLANE_API_KEY"
 health:
   # Keep a fixed port when you want a stable local admin URL.

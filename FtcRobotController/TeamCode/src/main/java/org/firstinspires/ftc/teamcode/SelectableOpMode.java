@@ -59,6 +59,7 @@ public abstract class SelectableOpMode extends OpMode {
     private String toolInstanceId = "";
     private DebugSessionState state = DebugSessionState.DEBUG_IDLE;
     private long loopCount;
+    private long connectionGeneration;
 
     /** Subclasses register folders and leaf tools here. */
     protected abstract void configure(Registry registry);
@@ -71,6 +72,7 @@ public abstract class SelectableOpMode extends OpMode {
                 StructuredRobotDataClient.DEFAULT_PORT,
                 "FTC Advanced Debugger");
         configureTelemetry(dataClient);
+        dataClient.enableBenchmarks();
         dataClient.start();
         dataClient.publishMessage(Envelope.newBuilder().setDebugManifest(manifest()));
         dataClient.publishMessage(Envelope.newBuilder().setDebugSafetyState(
@@ -90,6 +92,11 @@ public abstract class SelectableOpMode extends OpMode {
     @Override
     public final void loop() {
         if (dataClient == null) return;
+        if (dataClient.isConnected() && connectionGeneration != dataClient.connectionGeneration()) {
+            connectionGeneration=dataClient.connectionGeneration();
+            send(Envelope.newBuilder().setDebugManifest(manifest()));
+            if (activeNode != null) send(Envelope.newBuilder().setDebugToolReady(toolReady(activeNode)));
+        }
         processIncomingMessages();
         if (activeTool != null) {
             try {
@@ -133,12 +140,19 @@ public abstract class SelectableOpMode extends OpMode {
                     handleCommand(message.getDebugCommandRequest(), incomingMessage.receivedRobotTimeNs());
                     break;
                 default:
+                    if (activeTool != null) activeTool.receive(message);
                     break;
             }
         }
     }
 
     private void handleSelect(DebugSelectRequest request) {
+        if (activeTool != null && activeTool.busy()) {
+            send(Envelope.newBuilder().setDebugSelectResponse(DebugSelectResponse.newBuilder()
+                    .setRequestId(request.getRequestId()).setAccepted(false).setRejectionCode("BUSY")
+                    .setMessage("Finish or abort the current benchmark and receive its data first")));
+            return;
+        }
         Node node = registry.node(request.getNodeId());
         if (request.getManifestRevision() != MANIFEST_REVISION) {
             send(Envelope.newBuilder().setDebugSelectResponse(DebugSelectResponse.newBuilder()
@@ -164,7 +178,7 @@ public abstract class SelectableOpMode extends OpMode {
             activeNode = node;
             activeTool = node.factory.create();
             toolInstanceId = UUID.randomUUID().toString();
-            activeTool.init(new ToolContext(hardwareMap, telemetry, node.id, toolInstanceId));
+            activeTool.init(new ToolContext(hardwareMap, telemetry, node.id, toolInstanceId, dataClient));
             activeTool.start();
             state = DebugSessionState.DEBUG_READY;
             send(Envelope.newBuilder().setDebugSelectResponse(DebugSelectResponse.newBuilder()
@@ -245,6 +259,8 @@ public abstract class SelectableOpMode extends OpMode {
             sendToolState();
             return;
         }
+        DebugCommandResponse response=activeTool.command(request);
+        if (response != null) { send(Envelope.newBuilder().setDebugCommandResponse(response)); return; }
         send(Envelope.newBuilder().setDebugCommandResponse(DebugCommandResponse.newBuilder()
                 .setRequestId(request.getRequestId()).setCommandId(request.getCommandId())
                 .setResult(DebugCommandResult.DEBUG_COMMAND_REJECTED)
@@ -262,6 +278,14 @@ public abstract class SelectableOpMode extends OpMode {
     }
 
     private void publishTelemetry() {
+        // Benchmark samples stay on the robot until execution ends. Only status is live.
+        if (activeTool != null && !activeTool.benchmarks().isEmpty()) {
+            if (loopCount % 10 == 0) sendToolState();
+            telemetry.addData("Selected tool", activeNode.label);
+            telemetry.addData("TCP", dataClient.isConnected() ? "connected" : "connecting");
+            telemetry.update();
+            return;
+        }
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("debug.selectedTool", activeNode == null ? "" : activeNode.id);
         values.put("debug.motor.requestedPower", activeTool == null ? 0.0 : activeTool.requestedOutput());
@@ -299,6 +323,7 @@ public abstract class SelectableOpMode extends OpMode {
                 .setManifestRevision(MANIFEST_REVISION).setState(DebugSessionState.DEBUG_READY).setMessage("Tool ready");
         for (Parameter parameter : node.parameters) result.addParameters(parameter.toProto());
         for (Command command : node.commands) result.addCommands(command.toProto());
+        if (activeTool != null) result.addAllBenchmarks(activeTool.benchmarks());
         return result.build();
     }
 
@@ -341,6 +366,10 @@ public abstract class SelectableOpMode extends OpMode {
     }
 
     public interface Tool {
+        default boolean busy() { return false; }
+        default void receive(Envelope envelope) { }
+        default DebugCommandResponse command(DebugCommandRequest request) { return null; }
+        default List<org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition> benchmarks() { return Collections.emptyList(); }
         void init(ToolContext context) throws Exception;
         void start();
         void loop();
@@ -359,8 +388,10 @@ public abstract class SelectableOpMode extends OpMode {
         public final Telemetry telemetry;
         public final String toolId;
         public final String toolInstanceId;
-        ToolContext(HardwareMap hardwareMap, Telemetry telemetry, String toolId, String toolInstanceId) {
+        public final StructuredRobotDataClient dataClient;
+        ToolContext(HardwareMap hardwareMap, Telemetry telemetry, String toolId, String toolInstanceId, StructuredRobotDataClient dataClient) {
             this.hardwareMap = hardwareMap; this.telemetry = telemetry; this.toolId = toolId; this.toolInstanceId = toolInstanceId;
+            this.dataClient=dataClient;
         }
     }
 

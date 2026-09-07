@@ -42,6 +42,8 @@ from .telemetry_store import TelemetryProtocolError, TelemetryStore, TelemetryUp
 from .protocol import robot_data_pb2 as wire
 from .debug_commands import build_debug_command_request, command_request_id
 from .ftclog import FtcLogError, RawFtcLogRecorder
+from .debugger_results import DebuggerResults
+from .debugger_api import install_debugger_controls
 from .incidents import IncidentError, IncidentRecorder
 from .recording_uploader import RecordingUploadError, RecordingUploader, UploadSettings
 from .video_recorder import CameraRecordingConfig, VideoRecorder, VideoRecorderError
@@ -478,6 +480,8 @@ class RobotDataService:
             os.getenv("ROBOT_DATA_RECORDINGS_DIR", str(Path(__file__).resolve().parents[1] / "recordings"))
         ).resolve()
         self._raw_recorder = RawFtcLogRecorder(recordings_root)
+        self._debug_results = DebuggerResults(recordings_root)
+        self._benchmark_sessions: set[str] = set()
         self._incident_recorder = IncidentRecorder(recordings_root)
         self._recording_uploader: RecordingUploader | None = None
         self._upload_states: dict[str, dict[str, Any]] = {}
@@ -727,7 +731,8 @@ class RobotDataService:
         return self.capture_status()
 
     def recording_sessions(self) -> list[dict[str, object]]:
-        return self._raw_recorder.list_sessions()
+        debugger_ids = {r["runId"] for r in self._debug_results.list()}
+        return [r for r in self._raw_recorder.list_sessions() if r["session_id"] not in debugger_ids]
 
     def recording_path(self, session_id: str, log_name: str) -> Path:
         return self._raw_recorder.log_path(session_id, log_name)
@@ -749,6 +754,10 @@ class RobotDataService:
         if len(envelope.session_id) != 16:
             return
         session_id = str(uuid.UUID(bytes=envelope.session_id))
+        if envelope.HasField("hello") and "debug-runs-v1" in envelope.hello.capabilities:
+            self._benchmark_sessions.add(session_id)
+        if session_id in self._benchmark_sessions:
+            return  # Each benchmark is its own recording; no duplicate session/video popup.
         try:
             await asyncio.to_thread(self._raw_recorder.append, session_id, protobuf_frame, received_monotonic_ns)
             if peer is not None:
@@ -770,6 +779,15 @@ class RobotDataService:
         self._active_peer = packet.peer
         self._active_session_id = packet.envelope.session_id
         self._active_connection_id = packet.envelope.connection_id
+        dataset_ack = None
+        if packet.envelope.WhichOneof("body") in ("debug_run_header", "debug_run_chunk", "debug_run_end"):
+            try:
+                dataset_ack = await asyncio.to_thread(self._debug_results.ingest, packet.envelope,
+                                                     packet.protobuf_frame, packet.received_monotonic_ns)
+            except (ValueError, OSError, FtcLogError) as error:
+                run_id = getattr(packet.envelope, packet.envelope.WhichOneof("body")).run_id
+                pending = self._debug_results.pending.get(run_id)
+                if pending is not None: pending.update(state="incomplete", message=str(error))
         is_hello = packet.envelope.WhichOneof("body") == "hello"
         resumed = is_hello and self._telemetry.has_session(packet.payloads[0].get("sessionId"))
         session_id = packet.payloads[0].get("sessionId")
@@ -810,7 +828,19 @@ class RobotDataService:
             await self._broadcast_telemetry(update)
         for payload in packet.payloads:
             if str(payload.get("type", "")).startswith("debug_"):
+                if payload.get("type") in ("debug_run_header", "debug_run_chunk", "debug_run_end"):
+                    continue
                 data = dict(payload.get("data", {}))
+                if payload.get("type") == "debug_run_status":
+                    pending = self._debug_results.pending.get(data.get("runId"))
+                    if pending is not None:
+                        pending.update(data)
+                if payload.get("type") == "debug_command_response" and data.get("commandId") == "benchmark.run":
+                    pending = self._debug_results.pending.get(data.get("requestId"))
+                    if pending is not None:
+                        result = data.get("result")
+                        pending.update(state="running" if result in ("debug_command_accepted", "debug_command_duplicate") else "rejected",
+                                       message=data.get("message", ""))
                 message = {"type": payload.get("type"), "data": data, "robotTimeNs": payload.get("robotTimeNs")}
                 self._debug_last_event = message
                 if payload.get("type") == "debug_manifest": self._debug_manifest = data
@@ -820,6 +850,8 @@ class RobotDataService:
                 await self._broadcast_debug(message)
         if structured_accepted and is_hello:
             return self._hello_ack(packet.envelope, resumed=resumed)
+        if dataset_ack is not None:
+            return self._debug_envelope(debug_run_ack=dataset_ack)
         if any(payload.get("type") == "session_end" for payload in packet.payloads) and isinstance(session_id, str):
             await self._finalize_recording(session_id)
             await self._stop_capture_for_session(session_id)
@@ -860,6 +892,7 @@ class RobotDataService:
                 accepted=True,
                 server_time_ns=time.perf_counter_ns(),
                 session_resumed=resumed,
+                capabilities=["debug-runs-v1"],
             ),
         )
 
@@ -870,6 +903,7 @@ class RobotDataService:
             else:
                 self._peers.discard(peer)
                 if self._active_peer == peer:
+                    self._debug_results.disconnected()
                     self._active_peer = None
                     self._active_session_id = None
                     self._active_connection_id = None
@@ -1137,6 +1171,7 @@ robot_data_service.set_capture_callbacks(
     capture_stop=camera_coordinator.stop_recording_for_session,
 )
 app = FastAPI(title="FTC Local Driver Station", docs_url=None, redoc_url=None)
+install_debugger_controls(app, robot_data_service)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
@@ -1150,7 +1185,6 @@ async def startup() -> None:
     service.set_event_loop(asyncio.get_running_loop())
     await robot_data_service.start()
     adb_camera_service.start()
-    await asyncio.to_thread(camera_coordinator.start)
 
 
 @app.on_event("shutdown")
@@ -1424,9 +1458,7 @@ def connect(request: ConnectRequest) -> dict[str, Any]:
 
 @app.post("/api/disconnect")
 def disconnect() -> dict[str, Any]:
-    result = service.disconnect(stop=True)
-    camera_coordinator.stop_recording()
-    return result
+    return service.disconnect(stop=True)
 
 
 @app.get("/api/opmodes")
@@ -1479,14 +1511,9 @@ def save_configuration(request: ConfigurationSaveRequest) -> dict[str, object]:
 
 @app.post("/api/opmodes/init")
 def init_opmode(request: OpModeRequest) -> dict[str, Any]:
-    camera_started = False
     try:
-        camera_state = camera_coordinator.start_recording()
-        camera_started = bool(camera_state.get("recording"))
         return service.init_opmode(request)
-    except (ControlHubError, CameraRecordingError) as error:
-        if camera_started:
-            camera_coordinator.stop_recording()
+    except ControlHubError as error:
         raise _http_error(error) from error
 
 
@@ -1494,6 +1521,16 @@ def init_opmode(request: OpModeRequest) -> dict[str, Any]:
 def start_opmode(request: OpModeRequest) -> dict[str, Any]:
     try:
         return service.start_opmode(request)
+    except ControlHubError as error:
+        raise _http_error(error) from error
+
+
+@app.post("/api/opmodes/launch")
+def launch_opmode(request: OpModeRequest) -> dict[str, Any]:
+    """Stop, initialize, and start one Robot Controller-advertised OpMode."""
+
+    try:
+        return service.launch_opmode(request)
     except ControlHubError as error:
         raise _http_error(error) from error
 
@@ -1509,18 +1546,9 @@ def launch_debugger(request: OpModeRequest) -> dict[str, Any]:
 @app.post("/api/opmodes/stop")
 def stop_opmode() -> dict[str, Any]:
     try:
-        result = service.stop_opmode()
+        return service.stop_opmode()
     except ControlHubError as error:
-        # The phone must never be left recording just because Robocol lost its
-        # acknowledgement path. Camera Stop and import are independent of the
-        # RC transport and remain safe to execute in this failure mode.
-        camera_coordinator.stop_recording()
         raise _http_error(error) from error
-    try:
-        camera_coordinator.stop_recording()
-    except CameraRecordingError as error:
-        raise _http_error(error) from error
-    return result
 
 
 @app.put("/api/gamepads/{user}", status_code=204)

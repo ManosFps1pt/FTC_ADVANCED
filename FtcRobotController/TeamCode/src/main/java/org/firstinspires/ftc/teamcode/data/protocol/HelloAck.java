@@ -14,6 +14,7 @@ public  final class HelloAck extends
     HelloAckOrBuilder {
   private HelloAck() {
     reason_ = "";
+    capabilities_ = com.google.protobuf.GeneratedMessageLite.emptyProtobufList();
   }
   public static final int ACCEPTED_FIELD_NUMBER = 1;
   private boolean accepted_;
@@ -138,6 +139,99 @@ public  final class HelloAck extends
     checkByteStringIsUtf8(value);
     reason_ = value.toStringUtf8();
 
+  }
+
+  public static final int CAPABILITIES_FIELD_NUMBER = 5;
+  private com.google.protobuf.Internal.ProtobufList<java.lang.String> capabilities_;
+  /**
+   * <code>repeated string capabilities = 5;</code>
+   * @return A list containing the capabilities.
+   */
+  @java.lang.Override
+  public java.util.List<java.lang.String> getCapabilitiesList() {
+    return capabilities_;
+  }
+  /**
+   * <code>repeated string capabilities = 5;</code>
+   * @return The count of capabilities.
+   */
+  @java.lang.Override
+  public int getCapabilitiesCount() {
+    return capabilities_.size();
+  }
+  /**
+   * <code>repeated string capabilities = 5;</code>
+   * @param index The index of the element to return.
+   * @return The capabilities at the given index.
+   */
+  @java.lang.Override
+  public java.lang.String getCapabilities(int index) {
+    return capabilities_.get(index);
+  }
+  /**
+   * <code>repeated string capabilities = 5;</code>
+   * @param index The index of the value to return.
+   * @return The bytes of the capabilities at the given index.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getCapabilitiesBytes(int index) {
+    return com.google.protobuf.ByteString.copyFromUtf8(
+        capabilities_.get(index));
+  }
+  private void ensureCapabilitiesIsMutable() {
+    com.google.protobuf.Internal.ProtobufList<java.lang.String> tmp =
+        capabilities_;  if (!tmp.isModifiable()) {
+      capabilities_ =
+          com.google.protobuf.GeneratedMessageLite.mutableCopy(tmp);
+     }
+  }
+  /**
+   * <code>repeated string capabilities = 5;</code>
+   * @param index The index to set the value at.
+   * @param value The capabilities to set.
+   */
+  private void setCapabilities(
+      int index, java.lang.String value) {
+    java.lang.Class<?> valueClass = value.getClass();
+  ensureCapabilitiesIsMutable();
+    capabilities_.set(index, value);
+  }
+  /**
+   * <code>repeated string capabilities = 5;</code>
+   * @param value The capabilities to add.
+   */
+  private void addCapabilities(
+      java.lang.String value) {
+    java.lang.Class<?> valueClass = value.getClass();
+  ensureCapabilitiesIsMutable();
+    capabilities_.add(value);
+  }
+  /**
+   * <code>repeated string capabilities = 5;</code>
+   * @param values The capabilities to add.
+   */
+  private void addAllCapabilities(
+      java.lang.Iterable<java.lang.String> values) {
+    ensureCapabilitiesIsMutable();
+    com.google.protobuf.AbstractMessageLite.addAll(
+        values, capabilities_);
+  }
+  /**
+   * <code>repeated string capabilities = 5;</code>
+   */
+  private void clearCapabilities() {
+    capabilities_ = com.google.protobuf.GeneratedMessageLite.emptyProtobufList();
+  }
+  /**
+   * <code>repeated string capabilities = 5;</code>
+   * @param value The bytes of the capabilities to add.
+   */
+  private void addCapabilitiesBytes(
+      com.google.protobuf.ByteString value) {
+    checkByteStringIsUtf8(value);
+    ensureCapabilitiesIsMutable();
+    capabilities_.add(value.toStringUtf8());
   }
 
   public static org.firstinspires.ftc.teamcode.data.protocol.HelloAck parseFrom(
@@ -370,6 +464,98 @@ public  final class HelloAck extends
       return this;
     }
 
+    /**
+     * <code>repeated string capabilities = 5;</code>
+     * @return A list containing the capabilities.
+     */
+    @java.lang.Override
+    public java.util.List<java.lang.String>
+        getCapabilitiesList() {
+      return java.util.Collections.unmodifiableList(
+          instance.getCapabilitiesList());
+    }
+    /**
+     * <code>repeated string capabilities = 5;</code>
+     * @return The count of capabilities.
+     */
+    @java.lang.Override
+    public int getCapabilitiesCount() {
+      return instance.getCapabilitiesCount();
+    }
+    /**
+     * <code>repeated string capabilities = 5;</code>
+     * @param index The index of the element to return.
+     * @return The capabilities at the given index.
+     */
+    @java.lang.Override
+    public java.lang.String getCapabilities(int index) {
+      return instance.getCapabilities(index);
+    }
+    /**
+     * <code>repeated string capabilities = 5;</code>
+     * @param index The index of the value to return.
+     * @return The bytes of the capabilities at the given index.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getCapabilitiesBytes(int index) {
+      return instance.getCapabilitiesBytes(index);
+    }
+    /**
+     * <code>repeated string capabilities = 5;</code>
+     * @param index The index to set the value at.
+     * @param value The capabilities to set.
+     * @return This builder for chaining.
+     */
+    public Builder setCapabilities(
+        int index, java.lang.String value) {
+      copyOnWrite();
+      instance.setCapabilities(index, value);
+      return this;
+    }
+    /**
+     * <code>repeated string capabilities = 5;</code>
+     * @param value The capabilities to add.
+     * @return This builder for chaining.
+     */
+    public Builder addCapabilities(
+        java.lang.String value) {
+      copyOnWrite();
+      instance.addCapabilities(value);
+      return this;
+    }
+    /**
+     * <code>repeated string capabilities = 5;</code>
+     * @param values The capabilities to add.
+     * @return This builder for chaining.
+     */
+    public Builder addAllCapabilities(
+        java.lang.Iterable<java.lang.String> values) {
+      copyOnWrite();
+      instance.addAllCapabilities(values);
+      return this;
+    }
+    /**
+     * <code>repeated string capabilities = 5;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearCapabilities() {
+      copyOnWrite();
+      instance.clearCapabilities();
+      return this;
+    }
+    /**
+     * <code>repeated string capabilities = 5;</code>
+     * @param value The bytes of the capabilities to add.
+     * @return This builder for chaining.
+     */
+    public Builder addCapabilitiesBytes(
+        com.google.protobuf.ByteString value) {
+      copyOnWrite();
+      instance.addCapabilitiesBytes(value);
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:ftc.robotdata.v2.HelloAck)
   }
   @java.lang.Override
@@ -390,10 +576,11 @@ public  final class HelloAck extends
             "serverTimeNs_",
             "sessionResumed_",
             "reason_",
+            "capabilities_",
           };
           java.lang.String info =
-              "\u0000\u0004\u0000\u0000\u0001\u0004\u0004\u0000\u0000\u0000\u0001\u0007\u0002\u0003" +
-              "\u0003\u0007\u0004\u0208";
+              "\u0000\u0005\u0000\u0000\u0001\u0005\u0005\u0000\u0001\u0000\u0001\u0007\u0002\u0003" +
+              "\u0003\u0007\u0004\u0208\u0005\u021a";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       // fall through

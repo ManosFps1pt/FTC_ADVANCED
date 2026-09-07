@@ -3,6 +3,8 @@ package org.firstinspires.ftc.teamcode.data;
 import android.os.Build;
 import android.os.SystemClock;
 
+import com.pedropathing.follower.Follower;
+import com.pedropathing.geometry.Pose;
 import com.google.protobuf.ByteString;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.Gamepad;
@@ -52,6 +54,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.DoubleSupplier;
+import java.util.function.Supplier;
 
 /** Publishes protobuf telemetry without blocking the OpMode thread. */
 public final class StructuredRobotDataClient implements Closeable {
@@ -70,7 +73,12 @@ public final class StructuredRobotDataClient implements Closeable {
     private final List<Device> devices = new ArrayList<>();
     private final List<Signal> signals = new ArrayList<>();
     private final List<MotorBinding> motors = new ArrayList<>();
+    private final List<PoseBinding> poses = new ArrayList<>();
     private final LinkedBlockingDeque<Outbound> frames = new LinkedBlockingDeque<>(QUEUE_CAPACITY);
+    private final LinkedBlockingDeque<Outbound> reliableFrames = new LinkedBlockingDeque<>(16);
+    private final AtomicLong connectionGeneration = new AtomicLong();
+    private boolean benchmarkMode;
+    private volatile boolean serverSupportsBenchmarks;
     private final LinkedBlockingDeque<IncomingMessage> incoming = new LinkedBlockingDeque<>(64);
     private final AtomicLong nextSample = new AtomicLong(), droppedSamples = new AtomicLong(), lastLoopPublishNs = new AtomicLong();
     private final AtomicBoolean running = new AtomicBoolean(), connected = new AtomicBoolean();
@@ -143,6 +151,55 @@ public final class StructuredRobotDataClient implements Closeable {
         addSignal(deviceId + ".electricalPowerWatts", label + " Motor Electrical Power", deviceId,
                 "electricalPower", "W", "float64", "measured", 50);
         motors.add(new MotorBinding(deviceId, motor, commandedPower));
+        return this;
+    }
+
+    /**
+     * Publishes a fixed PedroPathing pose. Prefer a supplier or follower for a pose that changes
+     * while an OpMode is running.
+     */
+    public synchronized StructuredRobotDataClient addPose(String deviceId, String label, Pose pose) {
+        if (pose == null) throw new IllegalArgumentException("pose must not be null");
+        return addPose(deviceId, label, () -> pose);
+    }
+
+    /** Publishes the current PedroPathing pose returned by the supplied source on every loop. */
+    public synchronized StructuredRobotDataClient addPose(
+            String deviceId, String label, Supplier<Pose> poseSupplier) {
+        if (poseSupplier == null) throw new IllegalArgumentException("poseSupplier must not be null");
+        return addPoseValue(deviceId, label, () -> fromPedroPose(poseSupplier.get()));
+    }
+
+    /** Publishes {@link Follower#getPose()} on every loop. */
+    public synchronized StructuredRobotDataClient addPose(String deviceId, String label, Follower follower) {
+        if (follower == null) throw new IllegalArgumentException("follower must not be null");
+        return addPose(deviceId, label, follower::getPose);
+    }
+
+    /** Publishes a pose from live coordinate suppliers on every loop. Heading is in radians. */
+    public synchronized StructuredRobotDataClient addPose(
+            String deviceId, String label, DoubleSupplier x, DoubleSupplier y, DoubleSupplier headingRad) {
+        if (x == null || y == null || headingRad == null) throw new IllegalArgumentException("pose coordinate suppliers must not be null");
+        return addPoseValue(deviceId, label, () -> new PoseValue(
+                x.getAsDouble(), y.getAsDouble(), headingRad.getAsDouble()));
+    }
+
+    /**
+     * Publishes a pose from a dependency-neutral source. This is useful for a custom localizer
+     * that is not a PedroPathing {@link Pose} or {@link Follower}.
+     */
+    public synchronized StructuredRobotDataClient addPose(
+            String deviceId, String label, PoseSupplier poseSupplier) {
+        if (poseSupplier == null) throw new IllegalArgumentException("poseSupplier must not be null");
+        return addPoseValue(deviceId, label, poseSupplier);
+    }
+
+    private StructuredRobotDataClient addPoseValue(String deviceId, String label, PoseSupplier poseSupplier) {
+        ensureNotStarted();
+        addDevice(deviceId, label, "localization", "pose estimator");
+        addSignal(deviceId + ".pose", label + " Pose", deviceId,
+                "pose", "in,rad", "pose2d", "measured", 50);
+        poses.add(new PoseBinding(deviceId, poseSupplier));
         return this;
     }
 
@@ -235,6 +292,7 @@ public final class StructuredRobotDataClient implements Closeable {
         double robotVoltage = readVoltage();
         if (voltageSensor != null) values.put("robot.voltage", robotVoltage);
         for (MotorBinding motor : motors) motor.addValues(values, robotVoltage);
+        for (PoseBinding pose : poses) pose.addValues(values);
         return values;
     }
 
@@ -254,13 +312,20 @@ public final class StructuredRobotDataClient implements Closeable {
     public IncomingMessage pollIncomingMessage() { return incoming.poll(); }
 
     public boolean isConnected() { return connected.get(); }
+    public void enableBenchmarks() { ensureNotStarted(); benchmarkMode=true; }
+    public long connectionGeneration() { return connectionGeneration.get(); }
+    public boolean serverSupportsBenchmarks() { return connected.get() && serverSupportsBenchmarks; }
+    /** Backpressure instead of eviction. The benchmark retains data until receipt ACK. */
+    public boolean publishReliableMessage(Envelope.Builder message) {
+        return connected.get() && reliableFrames.offerLast(new Message(SystemClock.elapsedRealtimeNanos(), message.build()));
+    }
     public int getQueuedPacketCount() { return frames.size(); }
     public long getDroppedPacketCount() { return droppedSamples.get(); }
     public String getLastError() { return lastError; }
 
     @Override public synchronized void close() {
         if (!running.getAndSet(false)) return;
-        connected.set(false); closeSocket(socket); if (worker != null) worker.interrupt(); frames.clear(); incoming.clear();
+        connected.set(false); closeSocket(socket); if (worker != null) worker.interrupt(); frames.clear(); reliableFrames.clear(); incoming.clear();
     }
 
     private boolean enqueue(Outbound frame) {
@@ -287,9 +352,13 @@ public final class StructuredRobotDataClient implements Closeable {
         DataOutputStream output = new DataOutputStream(new BufferedOutputStream(active.getOutputStream()));
         DataInputStream input = new DataInputStream(new BufferedInputStream(active.getInputStream()));
         send(output, connection, SystemClock.elapsedRealtimeNanos(), value -> value.setHello(hello())); output.flush();
-        active.setSoTimeout(1500); validateHelloAck(readFrame(input), connection.id); active.setSoTimeout(0);
+        active.setSoTimeout(1500);
+        Envelope acknowledgement=readFrame(input);
+        validateHelloAck(acknowledgement, connection.id);
+        serverSupportsBenchmarks=acknowledgement.getHelloAck().getCapabilitiesList().contains("debug-runs-v1");
+        active.setSoTimeout(0);
         send(output, connection, SystemClock.elapsedRealtimeNanos(), value -> value.setSchema(schema())); output.flush();
-        connected.set(true); lastError = null;
+        reliableFrames.clear(); connectionGeneration.incrementAndGet(); connected.set(true); lastError = null;
         Thread reader = new Thread(() -> readIncoming(active, input), "StructuredRobotDataClient-reader");
         reader.setDaemon(true);
         reader.start();
@@ -297,7 +366,7 @@ public final class StructuredRobotDataClient implements Closeable {
         try {
             while (running.get() && !active.isClosed()) {
                 Outbound first;
-                try { first = frames.pollFirst(250, TimeUnit.MILLISECONDS); }
+                try { first = reliableFrames.pollFirst(); if (first == null) first = frames.pollFirst(20, TimeUnit.MILLISECONDS); }
                 catch (InterruptedException ignored) { Thread.currentThread().interrupt(); return; }
                 if (first instanceof Sample) {
                     List<Sample> batch = new ArrayList<>(); batch.add((Sample) first);
@@ -373,10 +442,12 @@ public final class StructuredRobotDataClient implements Closeable {
     }
 
     private Hello hello() {
-        return Hello.newBuilder().setRobotId("android-" + Build.MODEL.replace(' ', '-')).setRobotName("FTC Robot Controller")
+        Hello.Builder result = Hello.newBuilder().setRobotId("android-" + Build.MODEL.replace(' ', '-')).setRobotName("FTC Robot Controller")
                 .setOpModeName(opModeName).setStartedAtRobotTimeNs(SystemClock.elapsedRealtimeNanos()).setQueueCapacity(QUEUE_CAPACITY)
                 .addCapabilities("schema").addCapabilities("sample-batches").addCapabilities("events").addCapabilities("gaps")
-                .addCapabilities("debugger-v1").build();
+                .addCapabilities("debugger-v1");
+        if (benchmarkMode) result.addCapabilities("debug-runs-v1");
+        return result.build();
     }
 
     private Schema schema() {
@@ -414,6 +485,12 @@ public final class StructuredRobotDataClient implements Closeable {
             case INT64: if (!(raw instanceof Number)) throw invalid(signal, "integer"); return result.setInt64Value(((Number) raw).longValue()).build();
             case BOOLEAN: if (!(raw instanceof Boolean)) throw invalid(signal, "boolean"); return result.setBooleanValue((Boolean) raw).build();
             case STRING: case ENUM: return result.setStringValue(String.valueOf(raw)).build();
+            case POSE2D:
+                if (!(raw instanceof PoseValue)) throw invalid(signal, "PoseValue");
+                PoseValue pose = (PoseValue) raw;
+                if (!pose.isFinite()) return result.setUnavailable(true).build();
+                return result.setPose2DValue(org.firstinspires.ftc.teamcode.data.protocol.Pose2d.newBuilder()
+                        .setX(pose.x).setY(pose.y).setHeadingRad(pose.headingRad).build()).build();
             default: throw new IllegalArgumentException(signal.id + " uses an unsupported structured value type");
         }
     }
@@ -462,6 +539,33 @@ public final class StructuredRobotDataClient implements Closeable {
         public long receivedRobotTimeNs() { return receivedRobotTimeNs; }
     }
 
+    /** Immutable pose in PedroPathing field inches and radians. */
+    public static final class PoseValue {
+        public final double x;
+        public final double y;
+        public final double headingRad;
+
+        public PoseValue(double x, double y, double headingRad) {
+            this.x = x;
+            this.y = y;
+            this.headingRad = headingRad;
+        }
+
+        public static PoseValue of(double x, double y, double headingRad) {
+            return new PoseValue(x, y, headingRad);
+        }
+
+        private boolean isFinite() {
+            return Double.isFinite(x) && Double.isFinite(y) && Double.isFinite(headingRad);
+        }
+    }
+
+    /** Supplies a dependency-neutral pose for a custom localization implementation. */
+    @FunctionalInterface
+    public interface PoseSupplier {
+        PoseValue getPose();
+    }
+
     private interface Populator { void apply(Envelope.Builder envelope); }
     private interface Outbound { long robotTimeNs(); void apply(Envelope.Builder envelope); }
     private static final class Sample implements Outbound { final long robotTimeNs, sequence; final Map<String, Object> values; final boolean highlighted; Sample(long robotTimeNs, long sequence, Map<String, Object> values, boolean highlighted) { this.robotTimeNs = robotTimeNs; this.sequence = sequence; this.values = values; this.highlighted = highlighted; } public long robotTimeNs() { return robotTimeNs; } public void apply(Envelope.Builder ignored) { throw new UnsupportedOperationException("samples are batched"); } }
@@ -489,6 +593,23 @@ public final class StructuredRobotDataClient implements Closeable {
             values.put(deviceId + ".currentAmps", currentAmps);
             values.put(deviceId + ".electricalPowerWatts", currentAmps * robotVoltage);
         }
+    }
+    private static final class PoseBinding {
+        final String deviceId;
+        final PoseSupplier poseSupplier;
+
+        PoseBinding(String deviceId, PoseSupplier poseSupplier) {
+            this.deviceId = text(deviceId);
+            this.poseSupplier = poseSupplier;
+        }
+
+        void addValues(Map<String, Object> values) {
+            values.put(deviceId + ".pose", poseSupplier.getPose());
+        }
+    }
+    private static PoseValue fromPedroPose(Pose pose) {
+        if (pose == null) return null;
+        return new PoseValue(pose.getX(), pose.getY(), pose.getHeading());
     }
     private static final class Device { final String id, label, subsystem, deviceType; Device(String id, String label, String subsystem, String deviceType) { this.id = text(id); this.label = text(label); this.subsystem = text(subsystem); this.deviceType = text(deviceType); } }
     private static final class Signal { final String id, label, deviceId, quantity, unit; final ValueType valueType; final ChannelRole role; final double sampleHintHz; int channelId; Signal(String id, String label, String deviceId, String quantity, String unit, String type, String role, double sampleHintHz) { this.id = text(id); this.label = text(label); this.deviceId = deviceId; this.quantity = text(quantity); this.unit = text(unit); this.valueType = ValueType.valueOf(text(type).toUpperCase()); this.role = ChannelRole.valueOf(text(role).toUpperCase()); this.sampleHintHz = sampleHintHz; } }

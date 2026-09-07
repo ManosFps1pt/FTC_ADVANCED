@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import uuid
+from math import isfinite
+from google.protobuf.json_format import MessageToDict
 from collections.abc import Mapping
 from typing import Any
 
@@ -85,7 +87,7 @@ def decode(envelope: wire.Envelope, channel_keys: dict[int, tuple[str, int]]) ->
                 value = item.WhichOneof("value")
                 if value is None:
                     raise WireProtocolError("sample channel value is required")
-                raw = None if value == "unavailable" else getattr(item, value)
+                raw = None if value == "unavailable" else _channel_value(item, value)
                 # The normalized dashboard model represents int64 as a string
                 # because its browser API must retain every 64-bit value.
                 values[key] = str(raw) if raw is not None and value_type == wire.INT64 else raw
@@ -156,6 +158,7 @@ def decode(envelope: wire.Envelope, channel_keys: dict[int, tuple[str, int]]) ->
         return (_common(envelope, "debug_tool_ready", {
             "nodeId": value.node_id, "toolInstanceId": value.tool_instance_id,
             "manifestRevision": value.manifest_revision,
+            "benchmarks": [MessageToDict(item) for item in value.benchmarks],
             "parameters": [{
                 "id": item.id, "label": item.label, "description": item.description,
                 "valueType": wire.ValueType.Name(item.value_type).lower(),
@@ -214,7 +217,27 @@ def decode(envelope: wire.Envelope, channel_keys: dict[int, tuple[str, int]]) ->
             "tcpConnected": value.tcp_connected, "watchdogHealthy": value.watchdog_healthy,
             "outputAllowed": value.output_allowed, "blockedReason": value.blocked_reason,
         }),)
+    if body in ("debug_run_header", "debug_run_chunk", "debug_run_end", "debug_run_status"):
+        # Full datasets are consumed by the run recorder, not live telemetry history.
+        value = getattr(envelope, body)
+        data = MessageToDict(value) if body == "debug_run_status" else {"runId": value.run_id}
+        return (_common(envelope, body, data),)
     raise WireProtocolError(f"robot cannot send {body}")
+
+
+def _channel_value(value: wire.ChannelValue, value_name: str) -> Any:
+    """Convert protobuf composite values into the JSON-safe telemetry model."""
+
+    if value_name == "vector2_value":
+        return {"x": value.vector2_value.x, "y": value.vector2_value.y}
+    if value_name == "vector3_value":
+        return {"x": value.vector3_value.x, "y": value.vector3_value.y, "z": value.vector3_value.z}
+    if value_name == "pose2d_value":
+        pose = value.pose2d_value
+        if not all(isfinite(component) for component in (pose.x, pose.y, pose.heading_rad)):
+            return None
+        return {"x": pose.x, "y": pose.y, "headingRad": pose.heading_rad}
+    return getattr(value, value_name)
 
 
 def _gamepad(value: wire.Gamepad) -> dict[str, Any]:

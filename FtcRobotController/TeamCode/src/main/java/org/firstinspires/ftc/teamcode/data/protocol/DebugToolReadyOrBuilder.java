@@ -113,4 +113,18 @@ public interface DebugToolReadyOrBuilder extends
    */
   com.google.protobuf.ByteString
       getMessageBytes();
+
+  /**
+   * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+   */
+  java.util.List<org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition>
+      getBenchmarksList();
+  /**
+   * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+   */
+  org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition getBenchmarks(int index);
+  /**
+   * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+   */
+  int getBenchmarksCount();
 }

@@ -44,6 +44,11 @@ public  final class Envelope extends
     DEBUG_COMMAND_REQUEST(27),
     DEBUG_COMMAND_RESPONSE(28),
     DEBUG_SAFETY_STATE(29),
+    DEBUG_RUN_STATUS(30),
+    DEBUG_RUN_HEADER(31),
+    DEBUG_RUN_CHUNK(32),
+    DEBUG_RUN_END(33),
+    DEBUG_RUN_ACK(34),
     BODY_NOT_SET(0);
     private final int value;
     private BodyCase(int value) {
@@ -79,6 +84,11 @@ public  final class Envelope extends
         case 27: return DEBUG_COMMAND_REQUEST;
         case 28: return DEBUG_COMMAND_RESPONSE;
         case 29: return DEBUG_SAFETY_STATE;
+        case 30: return DEBUG_RUN_STATUS;
+        case 31: return DEBUG_RUN_HEADER;
+        case 32: return DEBUG_RUN_CHUNK;
+        case 33: return DEBUG_RUN_END;
+        case 34: return DEBUG_RUN_ACK;
         case 0: return BODY_NOT_SET;
         default: return null;
       }
@@ -1251,6 +1261,256 @@ public  final class Envelope extends
    */
   private void clearDebugSafetyState() {
     if (bodyCase_ == 29) {
+      bodyCase_ = 0;
+      body_ = null;
+    }
+  }
+
+  public static final int DEBUG_RUN_STATUS_FIELD_NUMBER = 30;
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunStatus debug_run_status = 30;</code>
+   */
+  @java.lang.Override
+  public boolean hasDebugRunStatus() {
+    return bodyCase_ == 30;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunStatus debug_run_status = 30;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugRunStatus getDebugRunStatus() {
+    if (bodyCase_ == 30) {
+       return (org.firstinspires.ftc.teamcode.data.protocol.DebugRunStatus) body_;
+    }
+    return org.firstinspires.ftc.teamcode.data.protocol.DebugRunStatus.getDefaultInstance();
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunStatus debug_run_status = 30;</code>
+   */
+  private void setDebugRunStatus(org.firstinspires.ftc.teamcode.data.protocol.DebugRunStatus value) {
+    value.getClass();
+  body_ = value;
+    bodyCase_ = 30;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunStatus debug_run_status = 30;</code>
+   */
+  private void mergeDebugRunStatus(org.firstinspires.ftc.teamcode.data.protocol.DebugRunStatus value) {
+    value.getClass();
+  if (bodyCase_ == 30 &&
+        body_ != org.firstinspires.ftc.teamcode.data.protocol.DebugRunStatus.getDefaultInstance()) {
+      body_ = org.firstinspires.ftc.teamcode.data.protocol.DebugRunStatus.newBuilder((org.firstinspires.ftc.teamcode.data.protocol.DebugRunStatus) body_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      body_ = value;
+    }
+    bodyCase_ = 30;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunStatus debug_run_status = 30;</code>
+   */
+  private void clearDebugRunStatus() {
+    if (bodyCase_ == 30) {
+      bodyCase_ = 0;
+      body_ = null;
+    }
+  }
+
+  public static final int DEBUG_RUN_HEADER_FIELD_NUMBER = 31;
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunHeader debug_run_header = 31;</code>
+   */
+  @java.lang.Override
+  public boolean hasDebugRunHeader() {
+    return bodyCase_ == 31;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunHeader debug_run_header = 31;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugRunHeader getDebugRunHeader() {
+    if (bodyCase_ == 31) {
+       return (org.firstinspires.ftc.teamcode.data.protocol.DebugRunHeader) body_;
+    }
+    return org.firstinspires.ftc.teamcode.data.protocol.DebugRunHeader.getDefaultInstance();
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunHeader debug_run_header = 31;</code>
+   */
+  private void setDebugRunHeader(org.firstinspires.ftc.teamcode.data.protocol.DebugRunHeader value) {
+    value.getClass();
+  body_ = value;
+    bodyCase_ = 31;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunHeader debug_run_header = 31;</code>
+   */
+  private void mergeDebugRunHeader(org.firstinspires.ftc.teamcode.data.protocol.DebugRunHeader value) {
+    value.getClass();
+  if (bodyCase_ == 31 &&
+        body_ != org.firstinspires.ftc.teamcode.data.protocol.DebugRunHeader.getDefaultInstance()) {
+      body_ = org.firstinspires.ftc.teamcode.data.protocol.DebugRunHeader.newBuilder((org.firstinspires.ftc.teamcode.data.protocol.DebugRunHeader) body_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      body_ = value;
+    }
+    bodyCase_ = 31;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunHeader debug_run_header = 31;</code>
+   */
+  private void clearDebugRunHeader() {
+    if (bodyCase_ == 31) {
+      bodyCase_ = 0;
+      body_ = null;
+    }
+  }
+
+  public static final int DEBUG_RUN_CHUNK_FIELD_NUMBER = 32;
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunChunk debug_run_chunk = 32;</code>
+   */
+  @java.lang.Override
+  public boolean hasDebugRunChunk() {
+    return bodyCase_ == 32;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunChunk debug_run_chunk = 32;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugRunChunk getDebugRunChunk() {
+    if (bodyCase_ == 32) {
+       return (org.firstinspires.ftc.teamcode.data.protocol.DebugRunChunk) body_;
+    }
+    return org.firstinspires.ftc.teamcode.data.protocol.DebugRunChunk.getDefaultInstance();
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunChunk debug_run_chunk = 32;</code>
+   */
+  private void setDebugRunChunk(org.firstinspires.ftc.teamcode.data.protocol.DebugRunChunk value) {
+    value.getClass();
+  body_ = value;
+    bodyCase_ = 32;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunChunk debug_run_chunk = 32;</code>
+   */
+  private void mergeDebugRunChunk(org.firstinspires.ftc.teamcode.data.protocol.DebugRunChunk value) {
+    value.getClass();
+  if (bodyCase_ == 32 &&
+        body_ != org.firstinspires.ftc.teamcode.data.protocol.DebugRunChunk.getDefaultInstance()) {
+      body_ = org.firstinspires.ftc.teamcode.data.protocol.DebugRunChunk.newBuilder((org.firstinspires.ftc.teamcode.data.protocol.DebugRunChunk) body_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      body_ = value;
+    }
+    bodyCase_ = 32;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunChunk debug_run_chunk = 32;</code>
+   */
+  private void clearDebugRunChunk() {
+    if (bodyCase_ == 32) {
+      bodyCase_ = 0;
+      body_ = null;
+    }
+  }
+
+  public static final int DEBUG_RUN_END_FIELD_NUMBER = 33;
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunEnd debug_run_end = 33;</code>
+   */
+  @java.lang.Override
+  public boolean hasDebugRunEnd() {
+    return bodyCase_ == 33;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunEnd debug_run_end = 33;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugRunEnd getDebugRunEnd() {
+    if (bodyCase_ == 33) {
+       return (org.firstinspires.ftc.teamcode.data.protocol.DebugRunEnd) body_;
+    }
+    return org.firstinspires.ftc.teamcode.data.protocol.DebugRunEnd.getDefaultInstance();
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunEnd debug_run_end = 33;</code>
+   */
+  private void setDebugRunEnd(org.firstinspires.ftc.teamcode.data.protocol.DebugRunEnd value) {
+    value.getClass();
+  body_ = value;
+    bodyCase_ = 33;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunEnd debug_run_end = 33;</code>
+   */
+  private void mergeDebugRunEnd(org.firstinspires.ftc.teamcode.data.protocol.DebugRunEnd value) {
+    value.getClass();
+  if (bodyCase_ == 33 &&
+        body_ != org.firstinspires.ftc.teamcode.data.protocol.DebugRunEnd.getDefaultInstance()) {
+      body_ = org.firstinspires.ftc.teamcode.data.protocol.DebugRunEnd.newBuilder((org.firstinspires.ftc.teamcode.data.protocol.DebugRunEnd) body_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      body_ = value;
+    }
+    bodyCase_ = 33;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunEnd debug_run_end = 33;</code>
+   */
+  private void clearDebugRunEnd() {
+    if (bodyCase_ == 33) {
+      bodyCase_ = 0;
+      body_ = null;
+    }
+  }
+
+  public static final int DEBUG_RUN_ACK_FIELD_NUMBER = 34;
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunAck debug_run_ack = 34;</code>
+   */
+  @java.lang.Override
+  public boolean hasDebugRunAck() {
+    return bodyCase_ == 34;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunAck debug_run_ack = 34;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugRunAck getDebugRunAck() {
+    if (bodyCase_ == 34) {
+       return (org.firstinspires.ftc.teamcode.data.protocol.DebugRunAck) body_;
+    }
+    return org.firstinspires.ftc.teamcode.data.protocol.DebugRunAck.getDefaultInstance();
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunAck debug_run_ack = 34;</code>
+   */
+  private void setDebugRunAck(org.firstinspires.ftc.teamcode.data.protocol.DebugRunAck value) {
+    value.getClass();
+  body_ = value;
+    bodyCase_ = 34;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunAck debug_run_ack = 34;</code>
+   */
+  private void mergeDebugRunAck(org.firstinspires.ftc.teamcode.data.protocol.DebugRunAck value) {
+    value.getClass();
+  if (bodyCase_ == 34 &&
+        body_ != org.firstinspires.ftc.teamcode.data.protocol.DebugRunAck.getDefaultInstance()) {
+      body_ = org.firstinspires.ftc.teamcode.data.protocol.DebugRunAck.newBuilder((org.firstinspires.ftc.teamcode.data.protocol.DebugRunAck) body_)
+          .mergeFrom(value).buildPartial();
+    } else {
+      body_ = value;
+    }
+    bodyCase_ = 34;
+  }
+  /**
+   * <code>.ftc.robotdata.v2.DebugRunAck debug_run_ack = 34;</code>
+   */
+  private void clearDebugRunAck() {
+    if (bodyCase_ == 34) {
       bodyCase_ = 0;
       body_ = null;
     }
@@ -2494,6 +2754,246 @@ public  final class Envelope extends
       return this;
     }
 
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunStatus debug_run_status = 30;</code>
+     */
+    @java.lang.Override
+    public boolean hasDebugRunStatus() {
+      return instance.hasDebugRunStatus();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunStatus debug_run_status = 30;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugRunStatus getDebugRunStatus() {
+      return instance.getDebugRunStatus();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunStatus debug_run_status = 30;</code>
+     */
+    public Builder setDebugRunStatus(org.firstinspires.ftc.teamcode.data.protocol.DebugRunStatus value) {
+      copyOnWrite();
+      instance.setDebugRunStatus(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunStatus debug_run_status = 30;</code>
+     */
+    public Builder setDebugRunStatus(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugRunStatus.Builder builderForValue) {
+      copyOnWrite();
+      instance.setDebugRunStatus(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunStatus debug_run_status = 30;</code>
+     */
+    public Builder mergeDebugRunStatus(org.firstinspires.ftc.teamcode.data.protocol.DebugRunStatus value) {
+      copyOnWrite();
+      instance.mergeDebugRunStatus(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunStatus debug_run_status = 30;</code>
+     */
+    public Builder clearDebugRunStatus() {
+      copyOnWrite();
+      instance.clearDebugRunStatus();
+      return this;
+    }
+
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunHeader debug_run_header = 31;</code>
+     */
+    @java.lang.Override
+    public boolean hasDebugRunHeader() {
+      return instance.hasDebugRunHeader();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunHeader debug_run_header = 31;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugRunHeader getDebugRunHeader() {
+      return instance.getDebugRunHeader();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunHeader debug_run_header = 31;</code>
+     */
+    public Builder setDebugRunHeader(org.firstinspires.ftc.teamcode.data.protocol.DebugRunHeader value) {
+      copyOnWrite();
+      instance.setDebugRunHeader(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunHeader debug_run_header = 31;</code>
+     */
+    public Builder setDebugRunHeader(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugRunHeader.Builder builderForValue) {
+      copyOnWrite();
+      instance.setDebugRunHeader(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunHeader debug_run_header = 31;</code>
+     */
+    public Builder mergeDebugRunHeader(org.firstinspires.ftc.teamcode.data.protocol.DebugRunHeader value) {
+      copyOnWrite();
+      instance.mergeDebugRunHeader(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunHeader debug_run_header = 31;</code>
+     */
+    public Builder clearDebugRunHeader() {
+      copyOnWrite();
+      instance.clearDebugRunHeader();
+      return this;
+    }
+
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunChunk debug_run_chunk = 32;</code>
+     */
+    @java.lang.Override
+    public boolean hasDebugRunChunk() {
+      return instance.hasDebugRunChunk();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunChunk debug_run_chunk = 32;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugRunChunk getDebugRunChunk() {
+      return instance.getDebugRunChunk();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunChunk debug_run_chunk = 32;</code>
+     */
+    public Builder setDebugRunChunk(org.firstinspires.ftc.teamcode.data.protocol.DebugRunChunk value) {
+      copyOnWrite();
+      instance.setDebugRunChunk(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunChunk debug_run_chunk = 32;</code>
+     */
+    public Builder setDebugRunChunk(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugRunChunk.Builder builderForValue) {
+      copyOnWrite();
+      instance.setDebugRunChunk(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunChunk debug_run_chunk = 32;</code>
+     */
+    public Builder mergeDebugRunChunk(org.firstinspires.ftc.teamcode.data.protocol.DebugRunChunk value) {
+      copyOnWrite();
+      instance.mergeDebugRunChunk(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunChunk debug_run_chunk = 32;</code>
+     */
+    public Builder clearDebugRunChunk() {
+      copyOnWrite();
+      instance.clearDebugRunChunk();
+      return this;
+    }
+
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunEnd debug_run_end = 33;</code>
+     */
+    @java.lang.Override
+    public boolean hasDebugRunEnd() {
+      return instance.hasDebugRunEnd();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunEnd debug_run_end = 33;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugRunEnd getDebugRunEnd() {
+      return instance.getDebugRunEnd();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunEnd debug_run_end = 33;</code>
+     */
+    public Builder setDebugRunEnd(org.firstinspires.ftc.teamcode.data.protocol.DebugRunEnd value) {
+      copyOnWrite();
+      instance.setDebugRunEnd(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunEnd debug_run_end = 33;</code>
+     */
+    public Builder setDebugRunEnd(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugRunEnd.Builder builderForValue) {
+      copyOnWrite();
+      instance.setDebugRunEnd(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunEnd debug_run_end = 33;</code>
+     */
+    public Builder mergeDebugRunEnd(org.firstinspires.ftc.teamcode.data.protocol.DebugRunEnd value) {
+      copyOnWrite();
+      instance.mergeDebugRunEnd(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunEnd debug_run_end = 33;</code>
+     */
+    public Builder clearDebugRunEnd() {
+      copyOnWrite();
+      instance.clearDebugRunEnd();
+      return this;
+    }
+
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunAck debug_run_ack = 34;</code>
+     */
+    @java.lang.Override
+    public boolean hasDebugRunAck() {
+      return instance.hasDebugRunAck();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunAck debug_run_ack = 34;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugRunAck getDebugRunAck() {
+      return instance.getDebugRunAck();
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunAck debug_run_ack = 34;</code>
+     */
+    public Builder setDebugRunAck(org.firstinspires.ftc.teamcode.data.protocol.DebugRunAck value) {
+      copyOnWrite();
+      instance.setDebugRunAck(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunAck debug_run_ack = 34;</code>
+     */
+    public Builder setDebugRunAck(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugRunAck.Builder builderForValue) {
+      copyOnWrite();
+      instance.setDebugRunAck(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunAck debug_run_ack = 34;</code>
+     */
+    public Builder mergeDebugRunAck(org.firstinspires.ftc.teamcode.data.protocol.DebugRunAck value) {
+      copyOnWrite();
+      instance.mergeDebugRunAck(value);
+      return this;
+    }
+    /**
+     * <code>.ftc.robotdata.v2.DebugRunAck debug_run_ack = 34;</code>
+     */
+    public Builder clearDebugRunAck() {
+      copyOnWrite();
+      instance.clearDebugRunAck();
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:ftc.robotdata.v2.Envelope)
   }
   @java.lang.Override
@@ -2537,13 +3037,18 @@ public  final class Envelope extends
             org.firstinspires.ftc.teamcode.data.protocol.DebugCommandRequest.class,
             org.firstinspires.ftc.teamcode.data.protocol.DebugCommandResponse.class,
             org.firstinspires.ftc.teamcode.data.protocol.DebugSafetyState.class,
+            org.firstinspires.ftc.teamcode.data.protocol.DebugRunStatus.class,
+            org.firstinspires.ftc.teamcode.data.protocol.DebugRunHeader.class,
+            org.firstinspires.ftc.teamcode.data.protocol.DebugRunChunk.class,
+            org.firstinspires.ftc.teamcode.data.protocol.DebugRunEnd.class,
+            org.firstinspires.ftc.teamcode.data.protocol.DebugRunAck.class,
           };
           java.lang.String info =
-              "\u0000\u0019\u0001\u0000\u0001\u001d\u0019\u0000\u0000\u0000\u0001\u000b\u0002\n" +
-              "\u0003\n\u0004\u0003\u0005\u0003\n<\u0000\u000b<\u0000\f<\u0000\r<\u0000\u000e<\u0000" +
-              "\u000f<\u0000\u0010<\u0000\u0011<\u0000\u0012<\u0000\u0013<\u0000\u0014<\u0000\u0015" +
-              "<\u0000\u0016<\u0000\u0017<\u0000\u0018<\u0000\u0019<\u0000\u001a<\u0000\u001b<\u0000" +
-              "\u001c<\u0000\u001d<\u0000";
+              "\u0000\u001e\u0001\u0000\u0001\"\u001e\u0000\u0000\u0000\u0001\u000b\u0002\n\u0003" +
+              "\n\u0004\u0003\u0005\u0003\n<\u0000\u000b<\u0000\f<\u0000\r<\u0000\u000e<\u0000\u000f" +
+              "<\u0000\u0010<\u0000\u0011<\u0000\u0012<\u0000\u0013<\u0000\u0014<\u0000\u0015<\u0000" +
+              "\u0016<\u0000\u0017<\u0000\u0018<\u0000\u0019<\u0000\u001a<\u0000\u001b<\u0000\u001c" +
+              "<\u0000\u001d<\u0000\u001e<\u0000\u001f<\u0000 <\u0000!<\u0000\"<\u0000";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       // fall through

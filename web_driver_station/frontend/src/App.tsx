@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RobotConfiguration } from "./RobotConfiguration";
 import { TelemetryDashboard } from "./TelemetryDashboard";
-import { MotorLab } from "./MotorLab";
+import { DebuggerPage } from "./DebuggerPage";
 
 type Status = {
   connected: boolean;
@@ -861,8 +861,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     runAction(async () => {
       if (!opmode) throw new Error("Select an OpMode first");
       await api<Status>("/opmodes/init", { method: "POST", body: JSON.stringify({ name: opmode }) });
-      setNotice(`Initialized ${opmode}. The selected camera recording was requested.`);
-      void refreshAdbCamera();
+      setNotice(`Initialized ${opmode}.`);
     });
 
   const start = () =>
@@ -876,8 +875,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     runAction(async () => {
       await api<Status>("/opmodes/stop", { method: "POST" });
       setGamepad(neutralGamepad());
-      setNotice("Robot stopped and gamepads released. Camera finalization and transfer started.");
-      void refreshAdbCamera();
+      setNotice("Robot stopped and gamepads released.");
     });
 
   const runLifecycleAction = () => {
@@ -890,7 +888,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     ? { label: "Stop", className: "danger", requiresOpmode: false }
     : status.robot_state === "INIT"
       ? { label: "Start", className: "primary", requiresOpmode: true }
-      : { label: adbCamera.selected_camera_serial ? "Init + camera" : "Init", className: "primary", requiresOpmode: true };
+      : { label: "Init", className: "primary", requiresOpmode: true };
 
   const releaseAll = () =>
     runAction(async () => {
@@ -1000,7 +998,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
               <option value="adb_volume_up">ADB Volume Up</option>
             </select>
           </label>
-          <small>{directMode ? "Preview is 240 px / 10 FPS while idle. Init records at the selected FPS." : "Init and Stop press the phone's native Camera controls. Live preview is disabled."}</small>
+          <small>Optional sidecar capture. It never affects Robot Controller connection, Init, Start, or Stop.</small>
         </div>
         {directMode ? <div className="direct-camera-settings">
           <label>Lens
@@ -1018,7 +1016,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
           </label>
           <label className="camera-flip"><input type="checkbox" checked={directDraft.flip} disabled={roleChangesLocked} onChange={(event) => editDirectCapture({ flip: event.target.checked })} /> Flip video</label>
           <button className="secondary" type="button" disabled={roleChangesLocked} onClick={() => void saveCaptureConfig("scrcpy_direct", directDraft)}>Save camera settings</button>
-        </div> : <p className="camera-preflight">Choose the Android camera below. Set its native Camera lens and frame rate on the phone before Init.</p>}
+        </div> : <p className="camera-preflight">Camera capture is optional. Assign an Android camera only when you want to use the native Camera controls.</p>}
         {adbCamera.adb_error && <p className="camera-error">{adbCamera.adb_error}</p>}
         {directMode && <DirectCameraPreview active={captureCamera.preview.running && !captureCamera.recording} detail={cameraDetail} />}
         {latestUpload && <div className={`camera-upload-status upload-${latestUpload[1].state}`}>
@@ -1153,7 +1151,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
       <RobotConfiguration connected={connected} robotState={status.robot_state} startedOpmode={status.started_opmode} />
     </main>}
     {page === "telemetry" && <TelemetryDashboard topbar={topbar} />}
-    {page === "debug" && <MotorLab />}
+    {page === "debug" && <DebuggerPage />}
     {pendingRecording && <RecordingUploadModal
       sessionId={pendingRecording[0]}
       uploadState={pendingRecording[1]}

@@ -19,6 +19,7 @@ public  final class DebugToolReady extends
     commands_ = emptyProtobufList();
     telemetryChannelIds_ = com.google.protobuf.GeneratedMessageLite.emptyProtobufList();
     message_ = "";
+    benchmarks_ = emptyProtobufList();
   }
   public static final int NODE_ID_FIELD_NUMBER = 1;
   private java.lang.String nodeId_;
@@ -508,6 +509,100 @@ public  final class DebugToolReady extends
     checkByteStringIsUtf8(value);
     message_ = value.toStringUtf8();
 
+  }
+
+  public static final int BENCHMARKS_FIELD_NUMBER = 9;
+  private com.google.protobuf.Internal.ProtobufList<org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition> benchmarks_;
+  /**
+   * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+   */
+  @java.lang.Override
+  public java.util.List<org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition> getBenchmarksList() {
+    return benchmarks_;
+  }
+  /**
+   * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+   */
+  public java.util.List<? extends org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinitionOrBuilder>
+      getBenchmarksOrBuilderList() {
+    return benchmarks_;
+  }
+  /**
+   * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+   */
+  @java.lang.Override
+  public int getBenchmarksCount() {
+    return benchmarks_.size();
+  }
+  /**
+   * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+   */
+  @java.lang.Override
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition getBenchmarks(int index) {
+    return benchmarks_.get(index);
+  }
+  /**
+   * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+   */
+  public org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinitionOrBuilder getBenchmarksOrBuilder(
+      int index) {
+    return benchmarks_.get(index);
+  }
+  private void ensureBenchmarksIsMutable() {
+    com.google.protobuf.Internal.ProtobufList<org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition> tmp = benchmarks_;
+    if (!tmp.isModifiable()) {
+      benchmarks_ =
+          com.google.protobuf.GeneratedMessageLite.mutableCopy(tmp);
+     }
+  }
+
+  /**
+   * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+   */
+  private void setBenchmarks(
+      int index, org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition value) {
+    value.getClass();
+  ensureBenchmarksIsMutable();
+    benchmarks_.set(index, value);
+  }
+  /**
+   * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+   */
+  private void addBenchmarks(org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition value) {
+    value.getClass();
+  ensureBenchmarksIsMutable();
+    benchmarks_.add(value);
+  }
+  /**
+   * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+   */
+  private void addBenchmarks(
+      int index, org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition value) {
+    value.getClass();
+  ensureBenchmarksIsMutable();
+    benchmarks_.add(index, value);
+  }
+  /**
+   * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+   */
+  private void addAllBenchmarks(
+      java.lang.Iterable<? extends org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition> values) {
+    ensureBenchmarksIsMutable();
+    com.google.protobuf.AbstractMessageLite.addAll(
+        values, benchmarks_);
+  }
+  /**
+   * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+   */
+  private void clearBenchmarks() {
+    benchmarks_ = emptyProtobufList();
+  }
+  /**
+   * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+   */
+  private void removeBenchmarks(int index) {
+    ensureBenchmarksIsMutable();
+    benchmarks_.remove(index);
   }
 
   public static org.firstinspires.ftc.teamcode.data.protocol.DebugToolReady parseFrom(
@@ -1124,6 +1219,108 @@ public  final class DebugToolReady extends
       return this;
     }
 
+    /**
+     * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+     */
+    @java.lang.Override
+    public java.util.List<org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition> getBenchmarksList() {
+      return java.util.Collections.unmodifiableList(
+          instance.getBenchmarksList());
+    }
+    /**
+     * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+     */
+    @java.lang.Override
+    public int getBenchmarksCount() {
+      return instance.getBenchmarksCount();
+    }/**
+     * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+     */
+    @java.lang.Override
+    public org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition getBenchmarks(int index) {
+      return instance.getBenchmarks(index);
+    }
+    /**
+     * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+     */
+    public Builder setBenchmarks(
+        int index, org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition value) {
+      copyOnWrite();
+      instance.setBenchmarks(index, value);
+      return this;
+    }
+    /**
+     * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+     */
+    public Builder setBenchmarks(
+        int index, org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition.Builder builderForValue) {
+      copyOnWrite();
+      instance.setBenchmarks(index,
+          builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+     */
+    public Builder addBenchmarks(org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition value) {
+      copyOnWrite();
+      instance.addBenchmarks(value);
+      return this;
+    }
+    /**
+     * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+     */
+    public Builder addBenchmarks(
+        int index, org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition value) {
+      copyOnWrite();
+      instance.addBenchmarks(index, value);
+      return this;
+    }
+    /**
+     * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+     */
+    public Builder addBenchmarks(
+        org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition.Builder builderForValue) {
+      copyOnWrite();
+      instance.addBenchmarks(builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+     */
+    public Builder addBenchmarks(
+        int index, org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition.Builder builderForValue) {
+      copyOnWrite();
+      instance.addBenchmarks(index,
+          builderForValue.build());
+      return this;
+    }
+    /**
+     * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+     */
+    public Builder addAllBenchmarks(
+        java.lang.Iterable<? extends org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition> values) {
+      copyOnWrite();
+      instance.addAllBenchmarks(values);
+      return this;
+    }
+    /**
+     * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+     */
+    public Builder clearBenchmarks() {
+      copyOnWrite();
+      instance.clearBenchmarks();
+      return this;
+    }
+    /**
+     * <code>repeated .ftc.robotdata.v2.DebugBenchmarkDefinition benchmarks = 9;</code>
+     */
+    public Builder removeBenchmarks(int index) {
+      copyOnWrite();
+      instance.removeBenchmarks(index);
+      return this;
+    }
+
     // @@protoc_insertion_point(builder_scope:ftc.robotdata.v2.DebugToolReady)
   }
   @java.lang.Override
@@ -1150,10 +1347,12 @@ public  final class DebugToolReady extends
             "telemetryChannelIds_",
             "state_",
             "message_",
+            "benchmarks_",
+            org.firstinspires.ftc.teamcode.data.protocol.DebugBenchmarkDefinition.class,
           };
           java.lang.String info =
-              "\u0000\b\u0000\u0000\u0001\b\b\u0000\u0003\u0000\u0001\u0208\u0002\u0208\u0003\u000b" +
-              "\u0004\u001b\u0005\u001b\u0006\u021a\u0007\f\b\u0208";
+              "\u0000\t\u0000\u0000\u0001\t\t\u0000\u0004\u0000\u0001\u0208\u0002\u0208\u0003\u000b" +
+              "\u0004\u001b\u0005\u001b\u0006\u021a\u0007\f\b\u0208\t\u001b";
           return newMessageInfo(DEFAULT_INSTANCE, info, objects);
       }
       // fall through
@@ -1207,4 +1406,3 @@ public  final class DebugToolReady extends
     return DEFAULT_INSTANCE.getParserForType();
   }
 }
-

@@ -17,6 +17,7 @@ type DebugStatus = { connected: boolean; tool_ready: DebugToolReady | null; last
 type DebugCommandResponseData = Record<string, unknown> & { requestId?: string; commandId?: string; result?: string; message?: string };
 type CommandInputValue = string | boolean;
 type CommandFeedback = { tone: "pending" | "success" | "failure"; message: string };
+type Pose2dValue = { x: number; y: number; headingRad: number };
 
 function isNumericArgument(valueType: string): boolean { return valueType === "int64" || valueType === "float64" || valueType === "int" || valueType === "float" || valueType === "double"; }
 function isIntegerArgument(valueType: string): boolean { return valueType === "int64" || valueType === "int"; }
@@ -33,6 +34,8 @@ const NANOSECONDS_PER_SECOND = 1_000_000_000;
 const TIMELINE_PIXELS_PER_SECOND = 96;
 const TIMELINE_SUBDIVISIONS_PER_SECOND = 4;
 const LOOP_TIME_SIGNAL_ID = "opmode.loopTimeMs";
+const PEDRO_FIELD_SIZE_INCHES = 144;
+const ROBOT_BOX_SIZE_INCHES = 18;
 
 function createCommandRequestId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -53,6 +56,15 @@ function numericValue(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim()) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : null; }
   return null;
+}
+
+function pose2dValue(value: unknown): Pose2dValue | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const x = numericValue(candidate.x);
+  const y = numericValue(candidate.y);
+  const headingRad = numericValue(candidate.headingRad);
+  return x === null || y === null || headingRad === null ? null : { x, y, headingRad };
 }
 
 function formatValue(value: unknown, unit: string): string {
@@ -123,6 +135,36 @@ function ControllerMonitor({ title, state }: { title: string; state: GamepadStat
 function LoopTimeMonitor({ snapshot }: { snapshot: Snapshot | null }) {
   const loopTime = snapshot ? numericValue(snapshot.values[LOOP_TIME_SIGNAL_ID]) : null;
   return <section className="loop-time-monitor"><div><p className="eyebrow">Robot loop</p><strong>Loop time</strong></div><output>{loopTime === null ? "WAITING" : formatValue(loopTime, "ms")}</output></section>;
+}
+
+function FieldMap({ signal, snapshot }: { signal: SignalDefinition | undefined; snapshot: Snapshot | null }) {
+  const pose = signal && snapshot ? pose2dValue(snapshot.values[signal.id]) : null;
+  const headingDegrees = pose ? pose.headingRad * 180 / Math.PI : 0;
+  const grid = Array.from({ length: 7 }, (_, index) => index * 24);
+  const live = pose !== null;
+  return <section className="field-map-section panel">
+    <div className="field-map-heading"><div><p className="eyebrow">PedroPathing field</p><h2>Localization</h2></div><span className={live ? "field-map-live" : ""}>{live ? "POSE LIVE" : signal ? "POSE UNAVAILABLE" : "WAITING"}</span></div>
+    {signal && <p className="field-map-signal">{signal.label} · 0–144 in · +X → · +Y ↑ · heading CCW from +X</p>}
+    <div className="field-map-layout">
+      <svg className="field-map" viewBox="-12 -8 164 164" role="img" aria-label={live ? `Robot pose X ${pose.x.toFixed(1)}, Y ${pose.y.toFixed(1)}, heading ${headingDegrees.toFixed(0)} degrees` : "PedroPathing field waiting for a pose"}>
+        <rect className="field-map-boundary" x="0" y="0" width={PEDRO_FIELD_SIZE_INCHES} height={PEDRO_FIELD_SIZE_INCHES} />
+        <g className="field-map-grid">
+          {grid.map((coordinate) => <line key={`vertical-${coordinate}`} x1={coordinate} x2={coordinate} y1="0" y2={PEDRO_FIELD_SIZE_INCHES} />)}
+          {grid.map((coordinate) => <line key={`horizontal-${coordinate}`} x1="0" x2={PEDRO_FIELD_SIZE_INCHES} y1={coordinate} y2={coordinate} />)}
+        </g>
+        <g className="field-map-labels">
+          {grid.map((coordinate) => <text key={`x-${coordinate}`} x={coordinate} y="153" textAnchor="middle">{coordinate}</text>)}
+          {grid.map((coordinate) => <text key={`y-${coordinate}`} x="-3" y={PEDRO_FIELD_SIZE_INCHES - coordinate + 2} textAnchor="end">{coordinate}</text>)}
+          <text x="72" y="161" textAnchor="middle">X (in)</text><text x="-10" y="72" textAnchor="middle" transform="rotate(-90 -10 72)">Y (in)</text>
+        </g>
+        {pose && <g transform={`translate(0 ${PEDRO_FIELD_SIZE_INCHES}) scale(1 -1)`}><g transform={`translate(${pose.x} ${pose.y}) rotate(${headingDegrees})`}>
+          <rect className="field-map-robot" x={-ROBOT_BOX_SIZE_INCHES / 2} y={-ROBOT_BOX_SIZE_INCHES / 2} width={ROBOT_BOX_SIZE_INCHES} height={ROBOT_BOX_SIZE_INCHES} rx="1.5" />
+          <path className="field-map-forward" d="M9 0 L2.5 3.5 L2.5 -3.5 Z" />
+        </g></g>}
+      </svg>
+      <dl className="field-map-values"><div><dt>X</dt><dd>{pose ? `${pose.x.toFixed(2)} in` : "—"}</dd></div><div><dt>Y</dt><dd>{pose ? `${pose.y.toFixed(2)} in` : "—"}</dd></div><div><dt>Heading</dt><dd>{pose ? `${headingDegrees.toFixed(1)}°` : "—"}</dd></div><div><dt>Channel</dt><dd>{signal?.id ?? "Waiting"}</dd></div></dl>
+    </div>
+  </section>;
 }
 
 function defaultCommandValue(argument: DebugCommandArgument): CommandInputValue {
@@ -296,6 +338,7 @@ export function TelemetryDashboard({ topbar }: { topbar: ReactNode }) {
 
   const numericSignals = useMemo(() => telemetry.catalog?.signals.filter((signal) => signal.valueType === "float64" || signal.valueType === "int64") ?? [], [telemetry.catalog]);
   const motorDevices = useMemo(() => telemetry.catalog?.devices.filter((device) => device.deviceType.toLowerCase().includes("motor")) ?? [], [telemetry.catalog]);
+  const localizationSignal = useMemo(() => telemetry.catalog?.signals.find((signal) => signal.valueType === "pose2d" && signal.role === "measured"), [telemetry.catalog]);
   const latestSnapshot = telemetry.snapshots.at(-1) ?? null;
   useEffect(() => { setSelectedSignals((previous) => { const allowed = previous.filter((id) => numericSignals.some((signal) => signal.id === id)); return allowed.length ? allowed : numericSignals.slice(0, MAX_TRACES).map((signal) => signal.id); }); }, [numericSignals]);
   const latestWindowStartIndex = useMemo(() => telemetry.snapshots.length ? firstSnapshotAtOrAfter(telemetry.snapshots, snapshotTimeNs(telemetry.snapshots.at(-1)!) - REPLAY_WINDOW_SECONDS * NANOSECONDS_PER_SECOND) : 0, [telemetry.snapshots]);
@@ -459,6 +502,7 @@ export function TelemetryDashboard({ topbar }: { topbar: ReactNode }) {
     <section className="tcp-command-panel panel"><div className="panel-heading"><div><p className="eyebrow">TCP command</p><strong>Robot functions</strong></div><span className={commands.length ? "alliance-ready" : ""}>{commands.length ? `${commands.length} READY` : "WAITING"}</span></div><p className="notice">Every function advertised by the running OpMode appears here with its typed arguments.</p>{commands.length ? <div className="command-card-list">{commands.map((command) => { const key = commandKey(command); return <CommandCard key={command.id} command={command} values={commandValues[key] ?? {}} busy={commandBusy[key] ?? false} feedback={commandFeedback[key]} onValueChange={(argumentId, value) => setCommandValue(command, argumentId, value)} onRun={() => void runCommand(command)} />; })}</div> : <p className="empty-state">Waiting for an OpMode to advertise its TCP functions.</p>}</section>
     <section className="editor-timeline panel"><div><p className="eyebrow">Instant replay · {REPLAY_WINDOW_SECONDS}-second window</p><strong>{replaySnapshot ? `Starts at sample #${replaySnapshot.sampleSequence} · ${replaySnapshots.length} frames` : "Waiting for samples"}</strong><button className="capture-button" type="button" disabled={!telemetry.snapshots.length || captureBusy} onClick={() => void toggleCapture()}>{telemetry.capture?.enabled ? "Capture override · ON" : "Capture override"}</button><button className="secondary" type="button" disabled={!telemetry.snapshots.length} onClick={showLatest}>{followingLatest ? `Following latest ${REPLAY_WINDOW_SECONDS} s` : `Show latest ${REPLAY_WINDOW_SECONDS} s`}</button></div><div className="timeline-viewport" ref={timelineRef} onPointerDown={() => setFollowingLatest(false)} onScroll={onTimelineScroll} onWheel={(event) => { setFollowingLatest(false); if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) { event.currentTarget.scrollLeft += event.deltaY; event.preventDefault(); } }}><div className="timeline-track" style={{ width: `${timeline.width}px` }}>{Array.from({ length: Math.floor(timeline.durationSeconds) + 1 }, (_, second) => <span className="timeline-label" style={{ left: `${second * TIMELINE_PIXELS_PER_SECOND}px` }} key={second}>{second}s</span>)}{Array.from({ length: Math.floor(timeline.durationSeconds * TIMELINE_SUBDIVISIONS_PER_SECOND) + 1 }, (_, tick) => <i aria-hidden="true" className={`timeline-ruler-tick ${tick % TIMELINE_SUBDIVISIONS_PER_SECOND === 0 ? "major" : ""}`} style={{ left: `${tick / TIMELINE_SUBDIVISIONS_PER_SECOND * TIMELINE_PIXELS_PER_SECOND}px` }} key={tick} />)}</div></div></section>
     <section className="motor-monitor-section panel"><div className="motor-monitor-section-heading"><div><p className="eyebrow">Live TCP stream</p><h2>Motor telemetry</h2></div><span>{motorDevices.length ? `${motorDevices.length} motors` : "Waiting for motor catalog"}</span></div>{motorDevices.length ? <div className="motor-monitor-grid">{motorDevices.map((device) => <MotorMonitor key={device.id} device={device} signals={telemetry.catalog?.signals ?? []} snapshot={latestSnapshot} />)}</div> : <p className="empty-state">Start an OpMode with DC motors to receive motor telemetry.</p>}</section>
+    <FieldMap signal={localizationSignal} snapshot={controllerSnapshot} />
     <section className="telemetry-editor"><aside className="trace-picker panel"><div><p className="eyebrow">Traces</p><strong>{traces.length} / {MAX_TRACES}</strong></div>{numericSignals.map((signal) => <label key={signal.id}><input type="checkbox" checked={selectedSignals.includes(signal.id)} onChange={() => toggleSignal(signal.id)} />{signal.label}</label>)}</aside><section className="trace-stack">{traces.length ? traces.map((signal, index) => <Trace key={signal.id} signal={signal} snapshots={replaySnapshots} windowStartNs={replaySnapshot ? snapshotTimeNs(replaySnapshot) : 0} color={TRACE_COLORS[index]} />) : <p className="empty-state">Choose a numeric trace.</p>}</section><aside className="controller-stack panel"><div><p className="eyebrow">Driver inputs</p><strong>{telemetry.session?.gamepadFrameCount ?? 0} frames</strong></div><ControllerMonitor title="Driver 1" state={replayGamepads?.gamepad1 ?? null} /><ControllerMonitor title="Driver 2" state={replayGamepads?.gamepad2 ?? null} /><LoopTimeMonitor snapshot={controllerSnapshot} /></aside></section>
   </main>;
 }

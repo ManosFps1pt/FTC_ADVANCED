@@ -186,7 +186,6 @@ public  final class Snapshot extends
    * @param value The highlighted to set.
    */
   private void setHighlighted(boolean value) {
-
     highlighted_ = value;
   }
   /**

@@ -37,4 +37,29 @@ public interface HelloAckOrBuilder extends
    */
   com.google.protobuf.ByteString
       getReasonBytes();
+
+  /**
+   * <code>repeated string capabilities = 5;</code>
+   * @return A list containing the capabilities.
+   */
+  java.util.List<java.lang.String>
+      getCapabilitiesList();
+  /**
+   * <code>repeated string capabilities = 5;</code>
+   * @return The count of capabilities.
+   */
+  int getCapabilitiesCount();
+  /**
+   * <code>repeated string capabilities = 5;</code>
+   * @param index The index of the element to return.
+   * @return The capabilities at the given index.
+   */
+  java.lang.String getCapabilities(int index);
+  /**
+   * <code>repeated string capabilities = 5;</code>
+   * @param index The index of the element to return.
+   * @return The capabilities at the given index.
+   */
+  com.google.protobuf.ByteString
+      getCapabilitiesBytes(int index);
 }

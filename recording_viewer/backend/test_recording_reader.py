@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 import uuid
@@ -110,6 +111,40 @@ class RecordingReaderTests(unittest.TestCase):
             self.assertEqual("telemetry_lab", recording.snapshots[0]["highlightSource"])
             self.assertEqual("debug_command_response", recording.debug_messages[0]["type"])
             self.assertEqual("motor.stop", recording.debug_messages[0]["commandId"])
+
+    def test_library_api_serializes_recorded_pose2d(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            recordings_root = Path(temporary_directory)
+            recorder = RawFtcLogRecorder(recordings_root)
+            session_id, connection_id = uuid.uuid4().bytes, uuid.uuid4().bytes
+            session_text = str(uuid.UUID(bytes=session_id))
+
+            def envelope(**body: object) -> bytes:
+                return wire.Envelope(
+                    protocol_version=2, session_id=session_id, connection_id=connection_id,
+                    connection_sequence=1, robot_elapsed_ns=123_000_000, **body,
+                ).SerializeToString()
+
+            recorder.append(session_text, envelope(hello=wire.Hello(robot_id="robot", robot_name="Replay Bot", op_mode_name="Localization")), 1)
+            recorder.append(session_text, envelope(schema=wire.Schema(revision=1, channels=[
+                wire.Channel(channel_id=1, key="localization.pose", label="Pose", quantity="pose", unit="in,rad", value_type=wire.POSE2D, role=wire.MEASURED),
+            ])), 2)
+            recorder.append(session_text, envelope(sample_batch=wire.SampleBatch(snapshots=[
+                wire.Snapshot(sample_sequence=7, schema_revision=1, values=[
+                    wire.ChannelValue(channel_id=1, pose2d_value=wire.Pose2d(x=24.5, y=111.25, heading_rad=1.57079632679)),
+                ]),
+            ])), 3)
+            recorder.close_session(session_text)
+
+            # FastAPI serializes this same browser model for the library API.
+            # ``allow_nan=False`` also ensures a malformed pose cannot turn
+            # into an invalid JSON response at replay time.
+            response = json.loads(json.dumps(Recording(recordings_root / session_text).browser_model(), allow_nan=False))
+
+            self.assertEqual(
+                {"x": 24.5, "y": 111.25, "headingRad": 1.57079632679},
+                response["snapshots"][0]["values"]["localization.pose"],
+            )
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { DebuggerLibrary } from "./DebuggerLibrary";
 
-type Signal = { id: string; label: string; unit: string; valueType: string };
+type Signal = { id: string; label: string; unit: string; valueType: string; role?: string };
 type Catalog = { schemaRevision: number; signals: Signal[] };
 type Snapshot = { sampleSequence: string; schemaRevision: number; robotTimeNs: string; highlighted?: boolean; highlightSource?: string | null; values: Record<string, unknown> };
 type Gamepad = Record<string, boolean | number>;
@@ -28,11 +29,21 @@ type LibraryRecording = { id: string; logFileCount: number; videoFileCount: numb
 
 const COLORS = ["#4bb8ff", "#4cdd9b", "#ffbc52"];
 const MAX_TRACES = 3;
+const PEDRO_FIELD_SIZE_INCHES = 144;
+const ROBOT_BOX_SIZE_INCHES = 18;
+type Pose2dValue = { x: number; y: number; headingRad: number };
 
 function numeric(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim()) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : null; }
   return null;
+}
+
+function pose2dValue(value: unknown): Pose2dValue | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const x = numeric(candidate.x); const y = numeric(candidate.y); const headingRad = numeric(candidate.headingRad);
+  return x === null || y === null || headingRad === null ? null : { x, y, headingRad };
 }
 
 function timeNs(snapshot: Snapshot): number { return Number(snapshot.robotTimeNs); }
@@ -83,7 +94,27 @@ function Controller({ label, gamepad }: { label: string; gamepad: Gamepad | null
   return <section className="controller panel"><div><strong>{label}</strong><small>{gamepad ? "Recorded input" : "No frame"}</small></div><div className="controller-body"><i className="stick" style={{ "--x": axis("leftStickX"), "--y": axis("leftStickY") } as CSSProperties} /><i className="stick" style={{ "--x": axis("rightStickX"), "--y": axis("rightStickY") } as CSSProperties} /><div className="buttons"><b className={bool("y") ? "on" : ""}>Y</b><b className={bool("x") ? "on" : ""}>X</b><b className={bool("b") ? "on" : ""}>B</b><b className={bool("a") ? "on" : ""}>A</b></div></div><div className="controller-row"><span className={bool("leftBumper") ? "on" : ""}>LB</span><span>LT {axis("leftTrigger").toFixed(2)}</span><span>RT {axis("rightTrigger").toFixed(2)}</span><span className={bool("rightBumper") ? "on" : ""}>RB</span></div></section>;
 }
 
-export default function App() {
+function FieldMap({ signal, snapshot }: { signal: Signal | undefined; snapshot: Snapshot | null }) {
+  const pose = signal && snapshot ? pose2dValue(snapshot.values[signal.id]) : null;
+  const headingDegrees = pose ? pose.headingRad * 180 / Math.PI : 0;
+  const grid = Array.from({ length: 7 }, (_, index) => index * 24);
+  const live = pose !== null;
+  return <section className="field-map panel">
+    <div className="field-map-heading"><div><p className="eyebrow">PedroPathing field</p><h2>Localization replay</h2></div><span className={live ? "field-map-live" : ""}>{live ? "POSE AT CURSOR" : signal ? "POSE UNAVAILABLE" : "WAITING"}</span></div>
+    {signal && <p className="field-map-signal">{signal.label} · 0–144 in · +X → · +Y ↑ · heading CCW from +X</p>}
+    <div className="field-map-layout">
+      <svg className="field-map-canvas" viewBox="-12 -8 164 164" role="img" aria-label={live ? `Robot pose X ${pose.x.toFixed(1)}, Y ${pose.y.toFixed(1)}, heading ${headingDegrees.toFixed(0)} degrees` : "PedroPathing field waiting for a replay pose"}>
+        <rect className="field-map-boundary" x="0" y="0" width={PEDRO_FIELD_SIZE_INCHES} height={PEDRO_FIELD_SIZE_INCHES} />
+        <g className="field-map-grid">{grid.map((coordinate) => <line key={`vertical-${coordinate}`} x1={coordinate} x2={coordinate} y1="0" y2={PEDRO_FIELD_SIZE_INCHES} />)}{grid.map((coordinate) => <line key={`horizontal-${coordinate}`} x1="0" x2={PEDRO_FIELD_SIZE_INCHES} y1={coordinate} y2={coordinate} />)}</g>
+        <g className="field-map-labels">{grid.map((coordinate) => <text key={`x-${coordinate}`} x={coordinate} y="153" textAnchor="middle">{coordinate}</text>)}{grid.map((coordinate) => <text key={`y-${coordinate}`} x="-3" y={PEDRO_FIELD_SIZE_INCHES - coordinate + 2} textAnchor="end">{coordinate}</text>)}<text x="72" y="161" textAnchor="middle">X (in)</text><text x="-10" y="72" textAnchor="middle" transform="rotate(-90 -10 72)">Y (in)</text></g>
+        {pose && <g transform={`translate(0 ${PEDRO_FIELD_SIZE_INCHES}) scale(1 -1)`}><g transform={`translate(${pose.x} ${pose.y}) rotate(${headingDegrees})`}><rect className="field-map-robot" x={-ROBOT_BOX_SIZE_INCHES / 2} y={-ROBOT_BOX_SIZE_INCHES / 2} width={ROBOT_BOX_SIZE_INCHES} height={ROBOT_BOX_SIZE_INCHES} rx="1.5" /><path className="field-map-forward" d="M9 0 L2.5 3.5 L2.5 -3.5 Z" /></g></g>}
+      </svg>
+      <dl className="field-map-values"><div><dt>X</dt><dd>{pose ? `${pose.x.toFixed(2)} in` : "—"}</dd></div><div><dt>Y</dt><dd>{pose ? `${pose.y.toFixed(2)} in` : "—"}</dd></div><div><dt>Heading</dt><dd>{pose ? `${headingDegrees.toFixed(1)}°` : "—"}</dd></div><div><dt>Channel</dt><dd>{signal?.id ?? "Waiting"}</dd></div></dl>
+    </div>
+  </section>;
+}
+
+function RecordingApp() {
   const [library, setLibrary] = useState<LibraryRecording[] | null>(null);
   const [selectedRecordingId, setSelectedRecordingId] = useState(() => new URLSearchParams(window.location.search).get("recording"));
   const [recording, setRecording] = useState<Recording | null>(null);
@@ -112,6 +143,7 @@ export default function App() {
   };
 
   const signals = useMemo(() => recording?.catalog?.signals.filter(signal => signal.valueType === "float64" || signal.valueType === "int64") ?? [], [recording]);
+  const localizationSignal = useMemo(() => recording?.catalog?.signals.find(signal => signal.valueType === "pose2d" && signal.role === "measured"), [recording]);
   useEffect(() => setSelected(previous => previous.length ? previous.filter(id => signals.some(signal => signal.id === id)) : signals.slice(0, MAX_TRACES).map(signal => signal.id)), [signals]);
   const startNs = recording?.snapshots.length ? timeNs(recording.snapshots[0]) : 0;
   const endNs = recording?.snapshots.length ? timeNs(recording.snapshots.at(-1)!) : 0;
@@ -153,10 +185,17 @@ export default function App() {
   return <main>
     <header className="topbar panel"><div><button className="back-button" onClick={() => selectRecording(null)}>← Recordings</button><p className="eyebrow">Offline replay</p><h1>{recording.session?.robotName ?? "FTC Recording"}</h1><p>{recording.session?.opModeName ?? "Unknown OpMode"}</p></div><dl><div><dt>Snapshots</dt><dd>{recording.snapshotCount.toLocaleString()}</dd></div><div><dt>Duration</dt><dd>{formatTime(duration)}</dd></div><div><dt>Log files</dt><dd>{recording.logFiles.length}</dd></div><div><dt>Gaps</dt><dd>{recording.gapCount}</dd></div></dl></header>
     <section className="timeline panel"><div><div><p className="eyebrow">Snapshot master clock · whole recording</p><strong>{snapshot ? `Sample #${snapshot.sampleSequence}${snapshot.highlighted ? ` · Highlighted by ${snapshot.highlightSource === "telemetry_lab" ? "Telemetry Lab" : "Control Hub"}` : ""}` : "No snapshots"}</strong><span>{formatTime(elapsed)} / {formatTime(duration)}</span></div><button onClick={() => setPlaying(value => !value)} disabled={!snapshot}>{playing ? "Pause" : "Play"}</button></div><input type="range" min="0" max={Math.max(0, duration)} step="0.001" value={playbackSeconds} onChange={event => { setPlaying(false); setPlaybackSeconds(Number(event.target.value)); }} /><div className="timeline-scale"><span>Start</span><span>End</span></div></section>
+    <FieldMap signal={localizationSignal} snapshot={snapshot} />
     {recording.incidents.length > 0 && <section className="replay-activity panel"><p className="eyebrow">Incident capture</p><div>{recording.incidents.map(incident => <button key={incident.id} onClick={() => { setPlaying(false); setPlaybackSeconds(Math.max(0, (Number(incident.startRobotTimeNs) - startNs) / 1_000_000_000)); }}><strong>{incident.sources.map(source => source === "telemetry_lab" ? "Telemetry Lab" : "Control Hub").join(" + ")}</strong><small>Samples #{incident.firstSampleSequence}–#{incident.lastSampleSequence}</small></button>)}</div></section>}
     {commandResponses.length > 0 && <section className="replay-activity panel"><p className="eyebrow">Telemetry Lab command confirmations</p><div>{commandResponses.map((message, index) => <article key={`${message.robotTimeNs}-${index}`}><strong>{message.commandId ?? "Command"} · {message.result ?? "response"}</strong><small>{message.message ?? "Control Hub response recorded"}</small></article>)}</div></section>}
     <section className="video-playback panel"><div className="video-heading"><div><p className="eyebrow">Video playback</p><strong>{selectedVideo ? selectedVideo.name : "No video in this recording"}</strong><small>Video plays at its native frame rate; snapshots follow the master clock independently.</small></div>{recording.videoClips.length > 1 && <label>Clip<select value={selectedVideoIndex} onChange={event => { setPlaying(false); setSelectedVideoIndex(Number(event.target.value)); setVideoDurationSeconds(null); }}>{recording.videoClips.map(clip => <option value={clip.index} key={clip.index}>{clip.name}</option>)}</select></label>}</div>{selectedVideo ? <div className="video-stage">{videoHasEnded ? <div className="black-frame">Video ended · snapshots continue to {formatTime(duration)}</div> : <video ref={videoRef} src={selectedVideo.url} muted playsInline preload="metadata" onLoadedMetadata={event => setVideoDurationSeconds(event.currentTarget.duration)} onEnded={() => setVideoDurationSeconds(videoRef.current?.duration ?? playbackSeconds)} />}</div> : <div className="black-frame">Add an MP4 anywhere inside this recording’s session folder to enable playback.</div>}</section>
     <section className="workspace"><aside className="signal-picker panel"><div><p className="eyebrow">Traces</p><strong>{traces.length} / {MAX_TRACES}</strong></div>{signals.map(signal => <label key={signal.id}><input type="checkbox" checked={selected.includes(signal.id)} onChange={() => toggle(signal.id)} />{signal.label}</label>)}</aside><section className="traces">{traces.length ? traces.map((signal, traceIndex) => <Trace key={signal.id} signal={signal} snapshots={recording.snapshots} startNs={startNs} endNs={endNs} color={COLORS[traceIndex]} />) : <p className="empty">Choose up to three numeric traces.</p>}</section><aside className="side"><Controller label="Driver 1" gamepad={gamepadFrame?.gamepad1 ?? null} /><Controller label="Driver 2" gamepad={gamepadFrame?.gamepad2 ?? null} /><section className="values panel"><p className="eyebrow">Current values</p>{snapshot ? Object.entries(snapshot.values).map(([id, value]) => <div key={id}><span>{recording.catalog?.signals.find(signal => signal.id === id)?.label ?? id}</span><output>{formatValue(value, recording.catalog?.signals.find(signal => signal.id === id)?.unit)}</output></div>) : <p>None</p>}</section></aside></section>
     {recording.invalidFrames > 0 && <p className="warning">Skipped {recording.invalidFrames} unsupported/corrupt frames while reading this recording.</p>}
   </main>;
+}
+
+export default function App() {
+  const [debuggerPage,setDebuggerPage]=useState(()=>window.location.hash.startsWith("#/debugger"));
+  useEffect(()=>{const changed=()=>setDebuggerPage(window.location.hash.startsWith("#/debugger"));window.addEventListener("hashchange",changed);return()=>window.removeEventListener("hashchange",changed);},[]);
+  return <><nav className="dbg-page dbg-actions" aria-label="Library sections"><a href="#/recordings" aria-current={!debuggerPage?"page":undefined}>Recordings</a><a href="#/debugger" aria-current={debuggerPage?"page":undefined}>Debugger Results</a></nav>{debuggerPage?<DebuggerLibrary/>:<RecordingApp/>}</>;
 }
