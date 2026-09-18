@@ -50,6 +50,13 @@ if errorlevel 1 (
     exit /b 1
 )
 
+rem winget normally installs npm beside node here, but an already-open shell may
+rem not have received the updated PATH yet.
+where npm >nul 2>nul
+if errorlevel 1 if exist "%ProgramFiles%\nodejs\npm.cmd" (
+    set "PATH=%ProgramFiles%\nodejs;%PATH%"
+)
+
 call :ensure_pnpm
 if errorlevel 1 exit /b 1
 
