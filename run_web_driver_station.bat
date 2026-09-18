@@ -36,26 +36,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-where node >nul 2>nul
-if errorlevel 1 (
-    call :install_winget_package "OpenJS.NodeJS.LTS" "Node.js LTS"
-    if errorlevel 1 exit /b 1
-    set "PATH=%ProgramFiles%\nodejs;%PATH%"
-)
-
-where node >nul 2>nul
-if errorlevel 1 (
-    echo Node.js was installed but is not available to this session yet.
-    echo Close this window and run the launcher again.
-    exit /b 1
-)
-
-rem winget normally installs npm beside node here, but an already-open shell may
-rem not have received the updated PATH yet.
-where npm >nul 2>nul
-if errorlevel 1 if exist "%ProgramFiles%\nodejs\npm.cmd" (
-    set "PATH=%ProgramFiles%\nodejs;%PATH%"
-)
+call :ensure_node_and_npm
+if errorlevel 1 exit /b 1
 
 call :ensure_pnpm
 if errorlevel 1 exit /b 1
@@ -114,7 +96,7 @@ if errorlevel 1 (
     exit /b 1
 )
 echo Installing %~2...
-winget install --id %~1 --exact --silent --accept-package-agreements --accept-source-agreements
+winget install --id %~1 --exact --silent --accept-package-agreements --accept-source-agreements %~3
 exit /b %ERRORLEVEL%
 
 :ensure_pnpm
@@ -155,5 +137,45 @@ if errorlevel 1 (
     echo pnpm was installed but is not available to this session yet.
     echo Close this window and run the launcher again.
     exit /b 1
+)
+exit /b 0
+
+:ensure_node_and_npm
+call :prefer_installed_node
+where node >nul 2>nul
+if errorlevel 1 (
+    call :install_winget_package "OpenJS.NodeJS.LTS" "Node.js LTS"
+    if errorlevel 1 exit /b 1
+    call :prefer_installed_node
+)
+
+where node >nul 2>nul
+if errorlevel 1 (
+    echo Node.js was installed but is not available to this session yet.
+    echo Close this window and run the launcher again.
+    exit /b 1
+)
+
+where npm >nul 2>nul
+if not errorlevel 1 exit /b 0
+
+echo Node.js was found without npm. Repairing the official Node.js LTS installation...
+call :install_winget_package "OpenJS.NodeJS.LTS" "Node.js LTS" "--force"
+if errorlevel 1 exit /b 1
+call :prefer_installed_node
+where npm >nul 2>nul
+if not errorlevel 1 exit /b 0
+
+echo Node.js is available but npm is still missing after repair.
+echo Close this window, open a new Command Prompt, and run the launcher again.
+exit /b 1
+
+:prefer_installed_node
+rem Prefer complete Windows Node installations over a bundled node-only runtime.
+if exist "%LOCALAPPDATA%\Programs\nodejs\node.exe" (
+    set "PATH=%LOCALAPPDATA%\Programs\nodejs;%PATH%"
+)
+if exist "%ProgramFiles%\nodejs\node.exe" (
+    set "PATH=%ProgramFiles%\nodejs;%PATH%"
 )
 exit /b 0
