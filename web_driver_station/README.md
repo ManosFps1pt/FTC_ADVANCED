@@ -10,9 +10,12 @@ Station and the browser must never be exposed beyond the local computer.
 ## Development
 
 The easiest Windows launch is to double-click
-`run_web_driver_station.bat` in the repository root. It prepares the local
-environment, builds the dashboard, starts the local server, and opens the
-browser. Python 3.11+ and Node.js LTS with pnpm are required the first time.
+`run_web_driver_station.bat` in the repository root. It installs missing
+Windows prerequisites (Python 3.12, Node.js LTS, Corepack/pnpm, and scrcpy)
+through `winget`, prepares the local environment, builds the dashboard, starts
+the local server, and opens the browser. The first launch needs Internet access
+and Windows App Installer (`winget`); if an installer updates PATH, close the
+window and run the launcher once more.
 
 From the repository root, create a virtual environment and install the Python
 dependencies:
