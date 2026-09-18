@@ -7,8 +7,7 @@ type Snapshot = { sampleSequence: string; robotTimeNs: string; highlighted?: boo
 type GamepadState = { leftStickX: number; leftStickY: number; rightStickX: number; rightStickY: number; leftTrigger: number; rightTrigger: number; a: boolean; b: boolean; x: boolean; y: boolean; dpadUp: boolean; dpadDown: boolean; dpadLeft: boolean; dpadRight: boolean; leftBumper: boolean; rightBumper: boolean; leftStickButton: boolean; rightStickButton: boolean; back: boolean; start: boolean; guide: boolean };
 type GamepadFrame = { robotTimeNs: string; gamepad1: GamepadState; gamepad2: GamepadState };
 type SessionSummary = { snapshotCount: number; gamepadFrameCount: number; active: boolean };
-type CaptureState = { enabled: boolean; sessionId: string | null };
-type TelemetryState = { session: SessionSummary | null; catalog: Catalog | null; snapshots: Snapshot[]; gamepadFrames: GamepadFrame[]; status: { lastError: string | null }; capture?: CaptureState };
+type TelemetryState = { session: SessionSummary | null; catalog: Catalog | null; snapshots: Snapshot[]; gamepadFrames: GamepadFrame[]; status: { lastError: string | null } };
 type DriverStationStatus = { driver_station_error: string | null };
 type DebugCommandArgument = { id: string; label: string; description: string; valueType: string; required: boolean; unit?: string; min?: number; max?: number; enumOptions?: { id: string; label: string }[] };
 type DebugCommand = { id: string; label: string; description: string; requiresHumanAcknowledgement: boolean; arguments: DebugCommandArgument[] };
@@ -18,6 +17,8 @@ type DebugCommandResponseData = Record<string, unknown> & { requestId?: string; 
 type CommandInputValue = string | boolean;
 type CommandFeedback = { tone: "pending" | "success" | "failure"; message: string };
 type Pose2dValue = { x: number; y: number; headingRad: number };
+type RgbLight = { device: DeviceDefinition; signal: SignalDefinition };
+type RgbLightColor = { label: string; color: string };
 
 function isNumericArgument(valueType: string): boolean { return valueType === "int64" || valueType === "float64" || valueType === "int" || valueType === "float" || valueType === "double"; }
 function isIntegerArgument(valueType: string): boolean { return valueType === "int64" || valueType === "int"; }
@@ -25,17 +26,29 @@ function isIntegerArgument(valueType: string): boolean { return valueType === "i
 const EMPTY_STATE: TelemetryState = { session: null, catalog: null, snapshots: [], gamepadFrames: [], status: { lastError: null } };
 const TRACE_COLORS = ["#4bb8ff", "#4cdd9b", "#ffbc52"];
 const MAX_TRACES = 3;
+const MAX_MOTOR_CURRENT_AMPS = 9;
+const MAX_ROBOT_CURRENT_AMPS = 20;
 // Keep enough high-frequency loop snapshots to fill the 10-second graph window.
 const MAX_HISTORY = 12_000;
 const COMMAND_TTL_MS = 1_000;
 const COMMAND_RESPONSE_TIMEOUT_MS = COMMAND_TTL_MS + 1_000;
-const REPLAY_WINDOW_SECONDS = 10;
+const LIVE_WINDOW_SECONDS = 10;
 const NANOSECONDS_PER_SECOND = 1_000_000_000;
-const TIMELINE_PIXELS_PER_SECOND = 96;
-const TIMELINE_SUBDIVISIONS_PER_SECOND = 4;
-const LOOP_TIME_SIGNAL_ID = "opmode.loopTimeMs";
 const PEDRO_FIELD_SIZE_INCHES = 144;
 const ROBOT_BOX_SIZE_INCHES = 18;
+const RGB_LIGHT_COLORS: Array<RgbLightColor & { dutyCycle: number }> = [
+  { label: "Off", dutyCycle: 0.000, color: "#05080d" },
+  { label: "Red", dutyCycle: 0.277, color: "#ff210b" },
+  { label: "Orange", dutyCycle: 0.333, color: "#ff7900" },
+  { label: "Yellow", dutyCycle: 0.388, color: "#ffe600" },
+  { label: "Sage", dutyCycle: 0.444, color: "#9fc85b" },
+  { label: "Green", dutyCycle: 0.500, color: "#12aa3e" },
+  { label: "Azure", dutyCycle: 0.555, color: "#078fd4" },
+  { label: "Blue", dutyCycle: 0.611, color: "#1465f0" },
+  { label: "Indigo", dutyCycle: 0.666, color: "#4720cf" },
+  { label: "Violet", dutyCycle: 0.722, color: "#8d2de2" },
+  { label: "White", dutyCycle: 1.000, color: "#ffffff" },
+];
 
 function createCommandRequestId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -45,11 +58,6 @@ function createCommandRequestId(): string {
 function snapshotTimeNs(snapshot: Snapshot): number {
   const time = Number(snapshot.robotTimeNs);
   return Number.isFinite(time) ? time : 0;
-}
-
-function firstSnapshotAtOrAfter(snapshots: Snapshot[], timeNs: number): number {
-  const index = snapshots.findIndex((snapshot) => snapshotTimeNs(snapshot) >= timeNs);
-  return index === -1 ? Math.max(0, snapshots.length - 1) : index;
 }
 
 function numericValue(value: unknown): number | null {
@@ -72,6 +80,38 @@ function formatValue(value: unknown, unit: string): string {
   if (numeric === null) return value == null ? "—" : String(value);
   const rendered = Math.abs(numeric) >= 1000 ? numeric.toFixed(0) : numeric.toFixed(2).replace(/\.00$/, "");
   return unit === "none" ? rendered : `${rendered} ${unit}`;
+}
+
+function interpolateColor(start: string, end: string, amount: number): string {
+  const startValue = Number.parseInt(start.slice(1), 16);
+  const endValue = Number.parseInt(end.slice(1), 16);
+  const channel = (shift: number) => Math.round(((startValue >> shift) & 255) + (((endValue >> shift) & 255) - ((startValue >> shift) & 255)) * amount);
+  return `rgb(${channel(16)} ${channel(8)} ${channel(0)})`;
+}
+
+function heatStyle(currentAmps: number | null, limitAmps: number): CSSProperties {
+  const ratio = currentAmps === null ? 0 : Math.max(0, Math.min(1, currentAmps / limitAmps));
+  return {
+    "--current-color": currentAmps === null ? "#36536d" : interpolateColor("#42c77a", "#e64f5b", ratio),
+    "--current-surface": currentAmps === null ? "#0b1d33" : interpolateColor("#113c2a", "#4c1e29", ratio),
+  } as CSSProperties;
+}
+
+function rgbLightColor(value: unknown): RgbLightColor | null {
+  const dutyCycle = numericValue(value);
+  if (dutyCycle === null) return null;
+  if (dutyCycle < RGB_LIGHT_COLORS[1].dutyCycle) return RGB_LIGHT_COLORS[0];
+  if (dutyCycle > RGB_LIGHT_COLORS[9].dutyCycle) return RGB_LIGHT_COLORS[10];
+  const exactColor = RGB_LIGHT_COLORS.find((candidate) => Math.abs(dutyCycle - candidate.dutyCycle) < 0.002);
+  if (exactColor) return exactColor;
+  for (let index = 1; index < RGB_LIGHT_COLORS.length - 1; index += 1) {
+    const current = RGB_LIGHT_COLORS[index];
+    const next = RGB_LIGHT_COLORS[index + 1];
+    if (dutyCycle > next.dutyCycle) continue;
+    const amount = (dutyCycle - current.dutyCycle) / (next.dutyCycle - current.dutyCycle);
+    return { label: "Color transition", color: interpolateColor(current.color, next.color, amount) };
+  }
+  return RGB_LIGHT_COLORS[10];
 }
 
 type MotorSignals = {
@@ -97,20 +137,67 @@ function motorSignals(device: DeviceDefinition, signals: SignalDefinition[]): Mo
 function MotorMonitor({ device, signals, snapshot }: { device: DeviceDefinition; signals: SignalDefinition[]; snapshot: Snapshot | null }) {
   const metrics = motorSignals(device, signals);
   const value = (signal?: SignalDefinition) => signal && snapshot ? snapshot.values[signal.id] : null;
-  const motorStatus = snapshot && metrics.commandedPower && metrics.position && metrics.velocity && metrics.current && metrics.electricalPower ? "LIVE" : "WAITING";
+  const currentAmps = numericValue(value(metrics.current));
+  const electricalPower = value(metrics.electricalPower);
+  const motorStatus = snapshot && metrics.commandedPower && metrics.velocity && metrics.current && metrics.electricalPower ? "LIVE" : "WAITING";
   return <article className="motor-monitor-card">
-    <div className="motor-monitor-heading"><div><p className="eyebrow">DC motor</p><strong>{device.label}</strong></div><span className={motorStatus === "LIVE" ? "motor-live" : ""}>{motorStatus}</span></div>
+    <div className="motor-monitor-heading"><strong>{device.label}</strong><span className={motorStatus === "LIVE" ? "motor-live" : ""}>{motorStatus}</span></div>
     <dl className="motor-metrics">
-      <div><dt>Commanded power</dt><dd>{formatValue(value(metrics.commandedPower), metrics.commandedPower?.unit ?? "normalized")}</dd></div>
-      <div><dt>Position</dt><dd>{formatValue(value(metrics.position), metrics.position?.unit ?? "ticks")}</dd></div>
-      <div><dt>Velocity</dt><dd>{formatValue(value(metrics.velocity), metrics.velocity?.unit ?? "ticks/s")}</dd></div>
-      <div><dt>Current</dt><dd>{formatValue(value(metrics.current), metrics.current?.unit ?? "A")}</dd></div>
-      <div><dt>Electrical power</dt><dd>{formatValue(value(metrics.electricalPower), metrics.electricalPower?.unit ?? "W")}</dd></div>
+      <div><dt>pow</dt><dd>{formatValue(value(metrics.commandedPower), metrics.commandedPower?.unit ?? "normalized")}</dd></div>
+      <div><dt>vel</dt><dd>{formatValue(value(metrics.velocity), "t/s")}</dd></div>
+      <div className="motor-electrical-readout" style={heatStyle(currentAmps, MAX_MOTOR_CURRENT_AMPS)}><div><dd>{formatValue(currentAmps, metrics.current?.unit ?? "A")}</dd></div><div><dd>{formatValue(electricalPower, metrics.electricalPower?.unit ?? "W")}</dd></div></div>
     </dl>
   </article>;
 }
 
-function Trace({ signal, snapshots, windowStartNs, color }: { signal: SignalDefinition; snapshots: Snapshot[]; windowStartNs: number; color: string }) {
+function powerBarLabel(device: DeviceDefinition): string {
+  const labels: Record<string, string> = { "drive.leftFront": "LF", "drive.leftBack": "LB", "drive.rightBack": "RB", "drive.rightFront": "RF", intake: "INT", "shooter.follower": "SF", "shooter.primary": "SP", turret: "TUR" };
+  return labels[device.id] ?? device.label.slice(0, 3).toUpperCase();
+}
+
+function PowerBar({ label, title, currentAmps, watts, maxCurrentAmps }: { label: string; title: string; currentAmps: number | null; watts: number | null; maxCurrentAmps: number }) {
+  // Current is the safety-relevant scale: voltage sag must not make a heavily
+  // loaded or stalled motor look less severe just because its wattage fell.
+  const ratio = currentAmps === null ? 0 : Math.max(0, Math.min(1, currentAmps / maxCurrentAmps));
+  const style = { ...heatStyle(currentAmps, maxCurrentAmps), "--power-ratio": String(ratio) } as CSSProperties;
+  return <article className="power-bar" style={style} title={`${title}: ${formatValue(watts, "W")} · ${formatValue(currentAmps, "A")}`}><span className="power-bar-name">{label}</span><div className="power-bar-track"><i /></div><strong>{watts === null ? "—" : `${watts.toFixed(0)} W`}</strong><small>{currentAmps === null ? "—" : `${currentAmps.toFixed(1)} A`}</small></article>;
+}
+
+function PowerMonitor({ devices, signals, snapshot }: { devices: DeviceDefinition[]; signals: SignalDefinition[]; snapshot: Snapshot | null }) {
+  const voltageSignal = signals.find((signal) => signal.id === "robot.voltage" || signal.quantity === "voltage");
+  const robotCurrentSignal = signals.find((signal) => signal.id === "robot.currentAmps");
+  const voltage = voltageSignal && snapshot ? numericValue(snapshot.values[voltageSignal.id]) : null;
+  const motorPowers = devices.slice(0, 8).map((device) => {
+    const metrics = motorSignals(device, signals);
+    const currentAmps = metrics.current && snapshot ? numericValue(snapshot.values[metrics.current.id]) : null;
+    const reportedWatts = metrics.electricalPower && snapshot ? numericValue(snapshot.values[metrics.electricalPower.id]) : null;
+    return { device, currentAmps, watts: reportedWatts ?? (currentAmps !== null && voltage !== null ? currentAmps * voltage : null) };
+  });
+  const knownCurrents = motorPowers.map((motor) => motor.currentAmps).filter((current): current is number => current !== null);
+  const knownWatts = motorPowers.map((motor) => motor.watts).filter((watts): watts is number => watts !== null);
+  const totalCurrentAmps = knownCurrents.length ? knownCurrents.reduce((sum, current) => sum + current, 0) : null;
+  const totalWatts = knownWatts.length ? knownWatts.reduce((sum, watts) => sum + watts, 0) : null;
+  const directRobotCurrent = robotCurrentSignal && snapshot ? numericValue(snapshot.values[robotCurrentSignal.id]) : null;
+  const robotCurrentAmps = directRobotCurrent ?? totalCurrentAmps;
+  const robotWatts = directRobotCurrent !== null && voltage !== null ? directRobotCurrent * voltage : totalWatts;
+  const robotPowerTitle = directRobotCurrent !== null ? "Robot current from REV hubs" : "Total streamed motor load";
+  return <section className="power-monitor panel"><span className="power-monitor-voltage">{voltage === null ? "WAITING" : `${voltage.toFixed(2)} V`}</span><div className="power-bar-grid">{motorPowers.map(({ device, currentAmps, watts }) => <PowerBar key={device.id} label={powerBarLabel(device)} title={device.label} currentAmps={currentAmps} watts={watts} maxCurrentAmps={MAX_MOTOR_CURRENT_AMPS} />)}<PowerBar label="ALL" title={robotPowerTitle} currentAmps={robotCurrentAmps} watts={robotWatts} maxCurrentAmps={MAX_ROBOT_CURRENT_AMPS} /></div></section>;
+}
+
+function RgbLightPanel({ lights, snapshot }: { lights: RgbLight[]; snapshot: Snapshot | null }) {
+  return <section className="rgb-light-panel panel">
+    <div className="rgb-light-panel-heading"><div><p className="eyebrow">Live indicator output</p><h2>RGB lights</h2></div><span>{lights.length ? `${lights.length} / 2 LIGHT${lights.length === 1 ? "" : "S"}` : "WAITING"}</span></div>
+    {lights.length ? <div className="rgb-light-grid">{lights.map(({ device, signal }) => {
+      const output = snapshot ? rgbLightColor(snapshot.values[signal.id]) : null;
+      return <article className="rgb-light-card" key={device.id}>
+        <span className="rgb-light-swatch" aria-hidden="true" style={{ "--light-color": output?.color ?? "#162637" } as CSSProperties} />
+        <div><strong>{device.label}</strong><small>{output?.label ?? "Waiting for light signal"}</small></div>
+      </article>;
+    })}</div> : <p className="empty-state">Waiting for an RGB indicator light to be advertised by the OpMode.</p>}
+  </section>;
+}
+
+function LiveTrace({ signal, snapshots, windowStartNs, color }: { signal: SignalDefinition; snapshots: Snapshot[]; windowStartNs: number; color: string }) {
   const graph = useMemo(() => {
     const points = snapshots.flatMap((snapshot) => {
       const value = numericValue(snapshot.values[signal.id]);
@@ -120,21 +207,18 @@ function Trace({ signal, snapshots, windowStartNs, color }: { signal: SignalDefi
     const values = points.map((point) => point.value);
     const minRaw = Math.min(...values); const maxRaw = Math.max(...values); const padding = minRaw === maxRaw ? Math.max(Math.abs(minRaw) * .08, 1) : (maxRaw - minRaw) * .08;
     const min = minRaw - padding; const max = maxRaw + padding; const span = Math.max(max - min, Number.EPSILON);
-    const path = points.map((point, index) => `${index ? "L" : "M"}${(30 + Math.max(0, Math.min(REPLAY_WINDOW_SECONDS, point.timeSeconds)) / REPLAY_WINDOW_SECONDS * 650).toFixed(1)} ${(8 + (1 - (point.value - min) / span) * 62).toFixed(1)}`).join(" ");
-    return { path, min, max, latest: points.at(-1)!.value };
+    const path = points.map((point, index) => `${index ? "L" : "M"}${(30 + Math.max(0, Math.min(LIVE_WINDOW_SECONDS, point.timeSeconds)) / LIVE_WINDOW_SECONDS * 650).toFixed(1)} ${(6 + (1 - (point.value - min) / span) * 86).toFixed(1)}`).join(" ");
+    const gridRows = Array.from({ length: 5 }, (_, index) => ({
+      y: 6 + index * 21.5,
+      value: max - (max - min) * index / 4,
+    }));
+    const timeTicks = Array.from({ length: 5 }, (_, index) => ({
+      x: 30 + index * 162.5,
+      seconds: LIVE_WINDOW_SECONDS * index / 4,
+    }));
+    return { path, gridRows, timeTicks, latest: points.at(-1)!.value };
   }, [signal.id, snapshots, windowStartNs]);
-  return <article className="replay-trace"><div><strong>{signal.label}</strong><span>{graph ? formatValue(graph.latest, signal.unit) : "WAITING"}</span></div>{graph ? <svg viewBox="0 0 700 94" role="img" aria-label={`${signal.label} replay trace over ${REPLAY_WINDOW_SECONDS} seconds`}><line x1="30" x2="680" y1="72" y2="72" className="trace-axis" /><line x1="30" x2="30" y1="5" y2="72" className="replay-marker" /><path d={graph.path} fill="none" stroke={color} strokeWidth="2.5" /><text x="1" y="13">{formatValue(graph.max, signal.unit)}</text><text x="1" y="73">{formatValue(graph.min, signal.unit)}</text><text x="30" y="89">0.0 s</text><text x="635" y="89">{REPLAY_WINDOW_SECONDS.toFixed(1)} s</text></svg> : <small>Waiting for a numeric sample</small>}</article>;
-}
-
-function ControllerMonitor({ title, state }: { title: string; state: GamepadState | null }) {
-  if (!state) return <section className="controller-monitor"><strong>{title}</strong><small>Waiting for gamepad data</small></section>;
-  const pressed = (value: boolean) => value ? "pressed" : "";
-  return <section className="controller-monitor"><div><strong>{title}</strong><small>Live input</small></div><div className="controller-monitor-body"><span className={`mini-stick ${pressed(state.leftStickButton)}`} style={{ "--x": state.leftStickX, "--y": state.leftStickY } as CSSProperties} /><span className={`mini-stick ${pressed(state.rightStickButton)}`} style={{ "--x": state.rightStickX, "--y": state.rightStickY } as CSSProperties} /><div className="mini-buttons"><i className={pressed(state.dpadUp)}>↑</i><i className={pressed(state.dpadLeft)}>←</i><i className={pressed(state.dpadDown)}>↓</i><i className={pressed(state.dpadRight)}>→</i></div><div className="mini-buttons face"><i className={pressed(state.y)}>Y</i><i className={pressed(state.x)}>X</i><i className={pressed(state.b)}>B</i><i className={pressed(state.a)}>A</i></div></div><div className="mini-shoulders"><span className={pressed(state.leftBumper)}>LB</span><label className={state.leftTrigger > 0.01 ? "pressed" : ""}><i style={{ width: `${state.leftTrigger * 100}%` }} /><b>LT {state.leftTrigger.toFixed(2)}</b></label><label className={state.rightTrigger > 0.01 ? "pressed" : ""}><i style={{ width: `${state.rightTrigger * 100}%` }} /><b>RT {state.rightTrigger.toFixed(2)}</b></label><span className={pressed(state.rightBumper)}>RB</span></div><div className="mini-system"><span className={pressed(state.back)}>BACK</span><span className={pressed(state.start)}>START</span><span className={pressed(state.guide)}>GUIDE</span></div></section>;
-}
-
-function LoopTimeMonitor({ snapshot }: { snapshot: Snapshot | null }) {
-  const loopTime = snapshot ? numericValue(snapshot.values[LOOP_TIME_SIGNAL_ID]) : null;
-  return <section className="loop-time-monitor"><div><p className="eyebrow">Robot loop</p><strong>Loop time</strong></div><output>{loopTime === null ? "WAITING" : formatValue(loopTime, "ms")}</output></section>;
+  return <article className="replay-trace live-trace"><div><strong>{signal.label}</strong><span>{graph ? formatValue(graph.latest, signal.unit) : "WAITING"}</span></div>{graph ? <svg viewBox="0 0 700 116" preserveAspectRatio="none" role="img" aria-label={`${signal.label} live trace over the last ${LIVE_WINDOW_SECONDS} seconds`}><rect x="30" y="6" width="650" height="86" className="trace-background" />{graph.gridRows.map((row, index) => <g key={`row-${index}`}><line x1="30" x2="680" y1={row.y} y2={row.y} className="trace-grid-line" /><text x="1" y={row.y + 3}>{formatValue(row.value, signal.unit)}</text></g>)}{graph.timeTicks.map((tick, index) => <g key={`time-${index}`}><line x1={tick.x} x2={tick.x} y1="6" y2="92" className="trace-grid-line trace-grid-time" /><text x={tick.x} y="109" textAnchor={index === 0 ? "start" : index === 4 ? "end" : "middle"}>{tick.seconds.toFixed(1)} s</text></g>)}<path d={graph.path} fill="none" stroke={color} strokeWidth="2.5" /></svg> : <small>Waiting for a numeric sample</small>}</article>;
 }
 
 function FieldMap({ signal, snapshot }: { signal: SignalDefinition | undefined; snapshot: Snapshot | null }) {
@@ -187,18 +271,15 @@ function CommandCard({ command, values, busy, feedback, onValueChange, onRun }: 
   return <article className="command-card"><div className="command-card-heading"><div><p className="eyebrow">Function</p><strong>{command.label || command.id}</strong><code>{command.id}</code></div><button className="command-run" type="button" disabled={busy} onClick={onRun}>{buttonLabel}</button></div>{command.description && <p className="command-description">{command.description}</p>}{command.arguments.length ? <div className="command-arguments">{command.arguments.map((argument) => <CommandArgumentEditor key={argument.id} argument={argument} value={values[argument.id] ?? defaultCommandValue(argument)} onChange={(value) => onValueChange(argument.id, value)} />)}</div> : <p className="command-no-arguments">This function has no arguments.</p>}{feedback && <p className={`command-feedback ${feedback.tone}`} role="status" aria-live="polite">{feedback.message}</p>}</article>;
 }
 
-export function TelemetryDashboard({ topbar }: { topbar: ReactNode }) {
+export function TelemetryDashboard({ topbar, opModeControl }: { topbar: ReactNode; opModeControl: ReactNode }) {
   const [telemetry, setTelemetry] = useState<TelemetryState>(EMPTY_STATE);
   const [driverStationError, setDriverStationError] = useState<string | null>(null);
   const [selectedSignals, setSelectedSignals] = useState<string[]>([]);
-  const [replayStartTimeNs, setReplayStartTimeNs] = useState<number | null>(null);
-  const [followingLatest, setFollowingLatest] = useState(false);
+  const [tracePickerOpen, setTracePickerOpen] = useState(false);
   const [debugStatus, setDebugStatus] = useState<DebugStatus>({ connected: false, tool_ready: null, last_event: null });
   const [commandValues, setCommandValues] = useState<Record<string, Record<string, CommandInputValue>>>({});
   const [commandBusy, setCommandBusy] = useState<Record<string, boolean>>({});
   const [commandFeedback, setCommandFeedback] = useState<Record<string, CommandFeedback>>({});
-  const [captureBusy, setCaptureBusy] = useState(false);
-  const timelineRef = useRef<HTMLDivElement>(null);
   const pendingCommandKeysByRequestIdRef = useRef<Record<string, string>>({});
   // Older already-running backends may replace the browser request ID. Keep a
   // response briefly so it can be correlated when their HTTP reply arrives.
@@ -278,7 +359,6 @@ export function TelemetryDashboard({ topbar }: { topbar: ReactNode }) {
       else if (message.kind === "telemetry_catalog") setTelemetry((previous) => ({ ...previous, catalog: message.data as Catalog }));
       else if (message.kind === "telemetry_snapshot") setTelemetry((previous) => ({ ...previous, snapshots: [...previous.snapshots, message.data as Snapshot].slice(-MAX_HISTORY) }));
       else if (message.kind === "telemetry_gamepad") setTelemetry((previous) => ({ ...previous, gamepadFrames: [...previous.gamepadFrames, message.data as GamepadFrame].slice(-MAX_HISTORY) }));
-      else if (message.kind === "telemetry_capture") setTelemetry((previous) => ({ ...previous, capture: message.data as CaptureState }));
     };
     return () => { active = false; socket.close(); };
   }, []);
@@ -337,60 +417,36 @@ export function TelemetryDashboard({ topbar }: { topbar: ReactNode }) {
   }, [debugStatus.tool_ready?.nodeId, debugStatus.tool_ready?.toolInstanceId]);
 
   const numericSignals = useMemo(() => telemetry.catalog?.signals.filter((signal) => signal.valueType === "float64" || signal.valueType === "int64") ?? [], [telemetry.catalog]);
-  const motorDevices = useMemo(() => telemetry.catalog?.devices.filter((device) => device.deviceType.toLowerCase().includes("motor")) ?? [], [telemetry.catalog]);
-  const localizationSignal = useMemo(() => telemetry.catalog?.signals.find((signal) => signal.valueType === "pose2d" && signal.role === "measured"), [telemetry.catalog]);
+  const motorDevices = useMemo(() => {
+    const driveOrder = ["drive.leftFront", "drive.leftBack", "drive.rightBack", "drive.rightFront"];
+    return (telemetry.catalog?.devices ?? [])
+      .filter((device) => device.deviceType.toLowerCase().includes("motor"))
+      .sort((left, right) => {
+        const leftRank = driveOrder.indexOf(left.id);
+        const rightRank = driveOrder.indexOf(right.id);
+        if (leftRank >= 0 || rightRank >= 0) return (leftRank < 0 ? driveOrder.length : leftRank) - (rightRank < 0 ? driveOrder.length : rightRank);
+        return left.label.localeCompare(right.label);
+      });
+  }, [telemetry.catalog]);
+  const rgbLights = useMemo(() => {
+    const devices = telemetry.catalog?.devices ?? [];
+    const signals = telemetry.catalog?.signals ?? [];
+    return devices.flatMap((device) => {
+      const isRgbLight = /rgb|indicator|light/i.test(`${device.id} ${device.label} ${device.deviceType}`);
+      const signal = signals.find((candidate) => candidate.deviceId === device.id && /duty.?cycle|color|light/i.test(`${candidate.id} ${candidate.quantity} ${candidate.label}`));
+      return isRgbLight && signal ? [{ device, signal }] : [];
+    });
+  }, [telemetry.catalog]);
+  const poseSignal = useMemo(() => telemetry.catalog?.signals.find((signal) => signal.valueType === "pose2d" || signal.quantity === "pose"), [telemetry.catalog]);
   const latestSnapshot = telemetry.snapshots.at(-1) ?? null;
   useEffect(() => { setSelectedSignals((previous) => { const allowed = previous.filter((id) => numericSignals.some((signal) => signal.id === id)); return allowed.length ? allowed : numericSignals.slice(0, MAX_TRACES).map((signal) => signal.id); }); }, [numericSignals]);
-  const latestWindowStartIndex = useMemo(() => telemetry.snapshots.length ? firstSnapshotAtOrAfter(telemetry.snapshots, snapshotTimeNs(telemetry.snapshots.at(-1)!) - REPLAY_WINDOW_SECONDS * NANOSECONDS_PER_SECOND) : 0, [telemetry.snapshots]);
-  useEffect(() => {
-    if (replayStartTimeNs === null && telemetry.snapshots.length) {
-      const startTimeNs = snapshotTimeNs(telemetry.snapshots[latestWindowStartIndex]);
-      setReplayStartTimeNs(startTimeNs);
-      requestAnimationFrame(() => timelineRef.current?.scrollTo({ left: Math.max(0, (startTimeNs - snapshotTimeNs(telemetry.snapshots[0])) / NANOSECONDS_PER_SECOND * TIMELINE_PIXELS_PER_SECOND) }));
-    }
-  }, [latestWindowStartIndex, replayStartTimeNs, telemetry.snapshots]);
-
-  const replayStartIndex = replayStartTimeNs === null ? 0 : firstSnapshotAtOrAfter(telemetry.snapshots, replayStartTimeNs);
-  const replaySnapshot = telemetry.snapshots[replayStartIndex] ?? null;
-  const replaySnapshots = useMemo(() => {
-    if (!replaySnapshot) return [];
-    const windowEndNs = snapshotTimeNs(replaySnapshot) + REPLAY_WINDOW_SECONDS * NANOSECONDS_PER_SECOND;
-    return telemetry.snapshots.slice(replayStartIndex).filter((snapshot) => snapshotTimeNs(snapshot) <= windowEndNs);
-  }, [replaySnapshot, replayStartIndex, telemetry.snapshots]);
-  const controllerSnapshot = followingLatest ? replaySnapshots.at(-1) ?? replaySnapshot : replaySnapshot;
-  const replayGamepads = useMemo(() => controllerSnapshot ? telemetry.gamepadFrames.reduce<GamepadFrame | null>((closest, frame) => !closest || Math.abs(Number(frame.robotTimeNs) - Number(controllerSnapshot.robotTimeNs)) < Math.abs(Number(closest.robotTimeNs) - Number(controllerSnapshot.robotTimeNs)) ? frame : closest, null) : null, [controllerSnapshot, telemetry.gamepadFrames]);
+  const liveSnapshots = useMemo(() => {
+    if (!latestSnapshot) return [];
+    const windowStartNs = snapshotTimeNs(latestSnapshot) - LIVE_WINDOW_SECONDS * NANOSECONDS_PER_SECOND;
+    return telemetry.snapshots.filter((snapshot) => snapshotTimeNs(snapshot) >= windowStartNs);
+  }, [latestSnapshot, telemetry.snapshots]);
+  const liveWindowStartNs = liveSnapshots.length ? snapshotTimeNs(liveSnapshots[0]) : 0;
   const traces = numericSignals.filter((signal) => selectedSignals.includes(signal.id));
-  const timeline = useMemo(() => {
-    if (!telemetry.snapshots.length) return { originNs: 0, durationSeconds: REPLAY_WINDOW_SECONDS, width: REPLAY_WINDOW_SECONDS * TIMELINE_PIXELS_PER_SECOND };
-    const originNs = snapshotTimeNs(telemetry.snapshots[0]);
-    const endNs = snapshotTimeNs(telemetry.snapshots.at(-1)!);
-    const durationSeconds = Math.max(REPLAY_WINDOW_SECONDS, (endNs - originNs) / NANOSECONDS_PER_SECOND);
-    return { originNs, durationSeconds, width: durationSeconds * TIMELINE_PIXELS_PER_SECOND };
-  }, [telemetry.snapshots]);
-  useEffect(() => {
-    if (!followingLatest || !telemetry.snapshots.length) return;
-    const startTimeNs = snapshotTimeNs(telemetry.snapshots[latestWindowStartIndex]);
-    setReplayStartTimeNs(startTimeNs);
-    const frame = requestAnimationFrame(() => timelineRef.current?.scrollTo({ left: Math.max(0, (startTimeNs - timeline.originNs) / NANOSECONDS_PER_SECOND * TIMELINE_PIXELS_PER_SECOND) }));
-    return () => cancelAnimationFrame(frame);
-  }, [followingLatest, latestWindowStartIndex, telemetry.snapshots, timeline.originNs]);
-  const selectReplay = (index: number, scroll = true) => {
-    const next = Math.max(0, Math.min(index, telemetry.snapshots.length - 1));
-    const nextTimeNs = snapshotTimeNs(telemetry.snapshots[next]);
-    setReplayStartTimeNs(nextTimeNs);
-    if (scroll) requestAnimationFrame(() => timelineRef.current?.scrollTo({ left: Math.max(0, (nextTimeNs - timeline.originNs) / NANOSECONDS_PER_SECOND * TIMELINE_PIXELS_PER_SECOND), behavior: "smooth" }));
-  };
-  const showLatest = () => {
-    setFollowingLatest(true);
-    selectReplay(latestWindowStartIndex, true);
-  };
-  const onTimelineScroll = () => {
-    if (followingLatest) return;
-    const element = timelineRef.current;
-    if (!element || !telemetry.snapshots.length) return;
-    const timeAtLeftEdge = timeline.originNs + element.scrollLeft / TIMELINE_PIXELS_PER_SECOND * NANOSECONDS_PER_SECOND;
-    setReplayStartTimeNs(snapshotTimeNs(telemetry.snapshots[firstSnapshotAtOrAfter(telemetry.snapshots, timeAtLeftEdge)]));
-  };
   const toggleSignal = (id: string) => setSelectedSignals((previous) => previous.includes(id) ? previous.filter((value) => value !== id) : [...previous, id].slice(-MAX_TRACES));
   const commands = debugStatus.tool_ready?.commands ?? [];
   const commandKey = (command: DebugCommand) => `${debugStatus.tool_ready?.nodeId ?? ""}:${debugStatus.tool_ready?.toolInstanceId ?? ""}:${command.id}`;
@@ -478,31 +534,21 @@ export function TelemetryDashboard({ topbar }: { topbar: ReactNode }) {
     }
   };
 
-  const toggleCapture = async () => {
-    const enabled = !telemetry.capture?.enabled;
-    setCaptureBusy(true);
-    try {
-      const response = await fetch("/api/data/telemetry/capture", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }),
-      });
-      const body = await response.json() as CaptureState & { detail?: string };
-      if (!response.ok) throw new Error(body.detail ?? "Could not change capture state");
-      setTelemetry((previous) => ({ ...previous, capture: body }));
-    } catch (error) {
-      setDriverStationError(error instanceof Error ? error.message : "Could not change capture state");
-    } finally {
-      setCaptureBusy(false);
-    }
-  };
-
   return <main className="telemetry-dashboard">
-    {topbar}
-    {driverStationError && <p className="telemetry-error"><strong>Robot Controller error:</strong> {driverStationError}</p>}
-    {telemetry.status.lastError && <p className="telemetry-error">Latest telemetry packet rejected: {telemetry.status.lastError}</p>}
-    <section className="tcp-command-panel panel"><div className="panel-heading"><div><p className="eyebrow">TCP command</p><strong>Robot functions</strong></div><span className={commands.length ? "alliance-ready" : ""}>{commands.length ? `${commands.length} READY` : "WAITING"}</span></div><p className="notice">Every function advertised by the running OpMode appears here with its typed arguments.</p>{commands.length ? <div className="command-card-list">{commands.map((command) => { const key = commandKey(command); return <CommandCard key={command.id} command={command} values={commandValues[key] ?? {}} busy={commandBusy[key] ?? false} feedback={commandFeedback[key]} onValueChange={(argumentId, value) => setCommandValue(command, argumentId, value)} onRun={() => void runCommand(command)} />; })}</div> : <p className="empty-state">Waiting for an OpMode to advertise its TCP functions.</p>}</section>
-    <section className="editor-timeline panel"><div><p className="eyebrow">Instant replay · {REPLAY_WINDOW_SECONDS}-second window</p><strong>{replaySnapshot ? `Starts at sample #${replaySnapshot.sampleSequence} · ${replaySnapshots.length} frames` : "Waiting for samples"}</strong><button className="capture-button" type="button" disabled={!telemetry.snapshots.length || captureBusy} onClick={() => void toggleCapture()}>{telemetry.capture?.enabled ? "Capture override · ON" : "Capture override"}</button><button className="secondary" type="button" disabled={!telemetry.snapshots.length} onClick={showLatest}>{followingLatest ? `Following latest ${REPLAY_WINDOW_SECONDS} s` : `Show latest ${REPLAY_WINDOW_SECONDS} s`}</button></div><div className="timeline-viewport" ref={timelineRef} onPointerDown={() => setFollowingLatest(false)} onScroll={onTimelineScroll} onWheel={(event) => { setFollowingLatest(false); if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) { event.currentTarget.scrollLeft += event.deltaY; event.preventDefault(); } }}><div className="timeline-track" style={{ width: `${timeline.width}px` }}>{Array.from({ length: Math.floor(timeline.durationSeconds) + 1 }, (_, second) => <span className="timeline-label" style={{ left: `${second * TIMELINE_PIXELS_PER_SECOND}px` }} key={second}>{second}s</span>)}{Array.from({ length: Math.floor(timeline.durationSeconds * TIMELINE_SUBDIVISIONS_PER_SECOND) + 1 }, (_, tick) => <i aria-hidden="true" className={`timeline-ruler-tick ${tick % TIMELINE_SUBDIVISIONS_PER_SECOND === 0 ? "major" : ""}`} style={{ left: `${tick / TIMELINE_SUBDIVISIONS_PER_SECOND * TIMELINE_PIXELS_PER_SECOND}px` }} key={tick} />)}</div></div></section>
-    <section className="motor-monitor-section panel"><div className="motor-monitor-section-heading"><div><p className="eyebrow">Live TCP stream</p><h2>Motor telemetry</h2></div><span>{motorDevices.length ? `${motorDevices.length} motors` : "Waiting for motor catalog"}</span></div>{motorDevices.length ? <div className="motor-monitor-grid">{motorDevices.map((device) => <MotorMonitor key={device.id} device={device} signals={telemetry.catalog?.signals ?? []} snapshot={latestSnapshot} />)}</div> : <p className="empty-state">Start an OpMode with DC motors to receive motor telemetry.</p>}</section>
-    <FieldMap signal={localizationSignal} snapshot={controllerSnapshot} />
-    <section className="telemetry-editor"><aside className="trace-picker panel"><div><p className="eyebrow">Traces</p><strong>{traces.length} / {MAX_TRACES}</strong></div>{numericSignals.map((signal) => <label key={signal.id}><input type="checkbox" checked={selectedSignals.includes(signal.id)} onChange={() => toggleSignal(signal.id)} />{signal.label}</label>)}</aside><section className="trace-stack">{traces.length ? traces.map((signal, index) => <Trace key={signal.id} signal={signal} snapshots={replaySnapshots} windowStartNs={replaySnapshot ? snapshotTimeNs(replaySnapshot) : 0} color={TRACE_COLORS[index]} />) : <p className="empty-state">Choose a numeric trace.</p>}</section><aside className="controller-stack panel"><div><p className="eyebrow">Driver inputs</p><strong>{telemetry.session?.gamepadFrameCount ?? 0} frames</strong></div><ControllerMonitor title="Driver 1" state={replayGamepads?.gamepad1 ?? null} /><ControllerMonitor title="Driver 2" state={replayGamepads?.gamepad2 ?? null} /><LoopTimeMonitor snapshot={controllerSnapshot} /></aside></section>
+    <div className="telemetry-top-shell">{topbar}{opModeControl}</div>
+    <div className="telemetry-notices">
+      {driverStationError && <p className="telemetry-error"><strong>Robot Controller error:</strong> {driverStationError}</p>}
+      {telemetry.status.lastError && <p className="telemetry-error">Latest telemetry packet rejected: {telemetry.status.lastError}</p>}
+    </div>
+    <div className="telemetry-body">
+      <aside className="tcp-command-panel panel"><div className="panel-heading"><strong>Commands</strong><span className={commands.length ? "alliance-ready" : ""}>{commands.length ? `${commands.length} READY` : "WAITING"}</span></div>{commands.length ? <div className="command-card-list">{commands.map((command) => { const key = commandKey(command); return <CommandCard key={command.id} command={command} values={commandValues[key] ?? {}} busy={commandBusy[key] ?? false} feedback={commandFeedback[key]} onValueChange={(argumentId, value) => setCommandValue(command, argumentId, value)} onRun={() => void runCommand(command)} />; })}</div> : null}</aside>
+      <section className="telemetry-workbench">
+      <section className="motor-monitor-section panel">{motorDevices.length ? <><div className="motor-monitor-grid">{motorDevices.map((device) => <MotorMonitor key={device.id} device={device} signals={telemetry.catalog?.signals ?? []} snapshot={latestSnapshot} />)}</div><div className="motor-monitor-aux"><RgbLightPanel lights={rgbLights} snapshot={latestSnapshot} /><FieldMap signal={poseSignal} snapshot={latestSnapshot} /></div></> : <p className="empty-state">Start an OpMode with DC motors to receive motor telemetry.</p>}</section>
+      <div className="telemetry-debug-layout">
+        <section className={`telemetry-editor ${tracePickerOpen ? "trace-picker-open" : ""}`}>{tracePickerOpen && <aside className="trace-picker panel"><div><strong>Traces</strong><button className="trace-picker-toggle" type="button" onClick={() => setTracePickerOpen(false)}>Done</button></div><div className="trace-picker-list">{numericSignals.map((signal) => <label key={signal.id}><input type="checkbox" checked={selectedSignals.includes(signal.id)} onChange={() => toggleSignal(signal.id)} /><span title={signal.label}>{signal.label}</span></label>)}</div></aside>}<section className="trace-workspace"><div className="trace-toolbar"><button className="trace-picker-toggle" type="button" onClick={() => setTracePickerOpen((open) => !open)}>{tracePickerOpen ? "Close traces" : "Edit traces"}</button></div><section className="trace-stack">{traces.length ? traces.map((signal, index) => <LiveTrace key={signal.id} signal={signal} snapshots={liveSnapshots} windowStartNs={liveWindowStartNs} color={TRACE_COLORS[index]} />) : <p className="empty-state">Choose a numeric trace.</p>}</section></section></section>
+        <PowerMonitor devices={motorDevices} signals={telemetry.catalog?.signals ?? []} snapshot={latestSnapshot} />
+      </div>
+    </section>
+    </div>
   </main>;
 }

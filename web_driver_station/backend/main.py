@@ -136,7 +136,9 @@ class AdbDeviceRoleRequest(BaseModel):
 class DirectScrcpySettingsRequest(BaseModel):
     facing: Literal["front", "back", "external"] | None = "back"
     aspect_ratio: str | None = Field(default=None, max_length=64)
-    fps: int = Field(default=60, ge=1, le=120)
+    fps: int = Field(default=30, ge=1, le=120)
+    max_size: int | None = Field(default=1280, ge=16, le=7680)
+    video_bit_rate: str = Field(default="4M", pattern=r"^[1-9]\d*[KMG]$")
     flip: bool = False
 
 
@@ -490,6 +492,7 @@ class RobotDataService:
         self._video_ready_checker: Callable[[str], bool] = lambda _session_id: True
         self._session_bound_callback: Callable[[str], None] | None = None
         self._capture_stop_callback: Callable[[str], None] | None = None
+        self._capture_start_callback: Callable[[str], None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         try:
             upload_settings = UploadSettings.from_environment()
@@ -508,10 +511,12 @@ class RobotDataService:
         video_ready_checker: Callable[[str], bool],
         session_bound: Callable[[str], None],
         capture_stop: Callable[[str], None],
+        capture_start: Callable[[str], None] | None = None,
     ) -> None:
         self._video_ready_checker = video_ready_checker
         self._session_bound_callback = session_bound
         self._capture_stop_callback = capture_stop
+        self._capture_start_callback = capture_start
 
     def video_finalized_from_thread(self, session_id: str, error: str | None) -> None:
         """Accept camera-worker completion without touching asyncio from its thread."""
@@ -796,6 +801,15 @@ class RobotDataService:
                 await asyncio.to_thread(self._incident_recorder.close_session, self._capture_override_session_id)
             self._capture_override_session_id = session_id
             self._capture_override_enabled = False
+            if self._capture_start_callback is not None:
+                try:
+                    # TCP can connect before the operator presses Init. Start
+                    # the optional camera sidecar here as a fallback and bind
+                    # it immediately to this raw-telemetry session.
+                    await asyncio.to_thread(self._capture_start_callback, session_id)
+                except (CameraRecordingError, OSError):
+                    # A missing camera must never reject a robot-data hello.
+                    pass
         updates: list[TelemetryUpdate] = []
         structured_accepted = True
         for payload in packet.payloads:
@@ -823,7 +837,6 @@ class RobotDataService:
                     # The raw stream remains authoritative and uploadable if the
                     # optional evidence index cannot be written.
                     pass
-        await self._broadcast_status()
         for update in updates:
             await self._broadcast_telemetry(update)
         for payload in packet.payloads:
@@ -848,6 +861,11 @@ class RobotDataService:
                 elif payload.get("type") == "debug_tool_state": self._debug_tool_state = data
                 elif payload.get("type") == "debug_safety_state": self._debug_safety = data
                 await self._broadcast_debug(message)
+        # Debug manifest and readiness updates are part of the connection
+        # status consumed by the workspace router. Publish only after they
+        # have been applied so a newly connected Debugger OpMode routes to its
+        # debugger page without waiting for a later telemetry packet.
+        await self._broadcast_status()
         if structured_accepted and is_hello:
             return self._hello_ack(packet.envelope, resumed=resumed)
         if dataset_ack is not None:
@@ -1169,6 +1187,7 @@ robot_data_service.set_capture_callbacks(
     video_ready_checker=camera_coordinator.video_ready_for,
     session_bound=camera_coordinator.bind_telemetry_session,
     capture_stop=camera_coordinator.stop_recording_for_session,
+    capture_start=camera_coordinator.ensure_recording,
 )
 app = FastAPI(title="FTC Local Driver Station", docs_url=None, redoc_url=None)
 install_debugger_controls(app, robot_data_service)
@@ -1512,7 +1531,14 @@ def save_configuration(request: ConfigurationSaveRequest) -> dict[str, object]:
 @app.post("/api/opmodes/init")
 def init_opmode(request: OpModeRequest) -> dict[str, Any]:
     try:
-        return service.init_opmode(request)
+        result = service.init_opmode(request)
+        try:
+            # Capture begins at the same lifecycle point as the OpMode. If a
+            # camera is not assigned, telemetry and robot Init still succeed.
+            camera_coordinator.ensure_recording()
+        except CameraRecordingError:
+            pass
+        return result
     except ControlHubError as error:
         raise _http_error(error) from error
 

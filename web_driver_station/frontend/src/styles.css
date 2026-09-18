@@ -61,12 +61,51 @@ label { display: grid; gap: .35rem; font-size: .8rem; font-weight: 700; color: #
 @media (max-width: 1050px) { .telemetry-dashboard { height: auto; min-height: 100dvh; overflow: visible; }.telemetry-editor { grid-template-columns: 1fr; overflow: visible; }.trace-stack { min-height: 22rem; }.trace-picker { max-height: 16rem; overflow: auto; }.controller-stack { min-height: 15rem; }.timeline-viewport { overflow-x: auto; }.field-map-layout { grid-template-columns: 1fr; }.field-map { width: min(100%, 28rem); }.field-map-values { max-width: 28rem; } }
 
 .telemetry-dashboard { grid-template-rows: auto auto auto auto minmax(0, 1fr); }
+.telemetry-dashboard > .opmode-control, .debugger-opmode-control > .opmode-control { margin: 0; padding: .65rem .85rem; }
+.telemetry-dashboard > .opmode-control { display: grid; grid-template-columns: minmax(14rem, .75fr) minmax(15rem, 1fr) auto; align-items: end; gap: .6rem .85rem; }
+.telemetry-dashboard > .opmode-control .panel-heading { margin: 0; }.telemetry-dashboard > .opmode-control .action-row { margin: 0; }.telemetry-dashboard > .opmode-control .action-row button { min-width: 6rem; }
+.debugger-opmode-control { margin: -.5rem 0 1rem; }
+.debugger-opmode-control > .opmode-control { display: grid; grid-template-columns: minmax(14rem, .6fr) minmax(15rem, 1fr) auto; align-items: end; gap: .6rem .85rem; }
+.debugger-opmode-control .panel-heading { margin: 0; }.debugger-opmode-control .action-row { margin: 0; }.debugger-opmode-control .action-row button { min-width: 6rem; }
+@media (max-width: 760px) { .telemetry-dashboard > .opmode-control, .debugger-opmode-control > .opmode-control { grid-template-columns: 1fr; align-items: stretch; }.telemetry-dashboard > .opmode-control .action-row, .debugger-opmode-control .action-row { margin-top: .1rem; } }
+
+/* Desktop workspaces stay inside one viewport. Secondary setup is collapsed
+   while idle; high-density data keeps its own panel instead of pushing the
+   primary controls below the fold. */
+@media (min-width: 1051px) {
+  .driver-dashboard { gap: .5rem; padding: .5rem 0; }
+  .driver-topbar { padding: .5rem .75rem; }.driver-brand h1 { font-size: 1.3rem; }
+  .driver-command-row { gap: .5rem; }.driver-command-row .connection-panel, .driver-command-row .lifecycle { padding: .55rem .7rem; }
+  .driver-command-row .connection-panel { grid-template-columns: minmax(11rem, 1fr) auto minmax(10rem, .9fr); gap: .55rem; }
+  .driver-dashboard .dashboard-grid { gap: .55rem; }.driver-dashboard .gamepad, .driver-dashboard .telemetry { padding: .7rem; }
+  .driver-dashboard .panel-heading { margin-bottom: .5rem; }.driver-dashboard .controller-layout { gap: .45rem; }
+  .driver-dashboard .control-cluster { padding: .45rem; }.driver-dashboard .control-cluster h3 { margin: .35rem 0; font-size: .75rem; }
+  .driver-dashboard .axis { margin-bottom: .35rem; }.driver-dashboard .control-button { min-width: 2.6rem; padding: .42rem .5rem; }
+  .driver-dashboard .release { margin-top: .55rem; }.driver-dashboard .two-buttons, .driver-dashboard .dpad, .driver-dashboard .face-buttons { gap: .25rem; }
+
+  .telemetry-dashboard { grid-template-rows: auto auto min-content min-content min-content minmax(0, 1fr); gap: .45rem; padding: .5rem 0; }
+  .telemetry-dashboard .driver-topbar { padding: .5rem .75rem; }.telemetry-notices { display: grid; gap: .35rem; min-height: 0; }
+  .telemetry-dashboard .telemetry-error { margin: 0; padding: .45rem .65rem; font-size: .75rem; }
+  .telemetry-dashboard > .opmode-control { padding: .5rem .7rem; }.telemetry-dashboard > .opmode-control .eyebrow { margin-bottom: .08rem; }
+  .tcp-command-panel { gap: .3rem; padding: .5rem .7rem; }.tcp-command-panel .notice { font-size: .7rem; }.tcp-command-panel .empty-state { margin: 0; font-size: .72rem; }
+  .editor-timeline { padding: .45rem .7rem; }.editor-timeline .timeline-viewport { height: 2.2rem; }
+  .telemetry-workbench { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); min-height: 0; gap: .55rem; overflow: hidden; }
+  .motor-monitor-section { padding: .55rem; overflow: auto; scrollbar-width: thin; }
+  .motor-monitor-section-heading { margin-bottom: .3rem; }.motor-monitor-section-heading h2, .field-map-heading h2 { font-size: .95rem; }
+  .motor-monitor-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .35rem; }
+  .motor-monitor-card { padding: .45rem; }.motor-monitor-heading { margin-bottom: .25rem; }
+  .telemetry-debug-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(15rem, .42fr); min-height: 0; gap: .55rem; overflow: hidden; }
+  .telemetry-editor { grid-template-columns: minmax(12rem, .38fr) minmax(0, 1.62fr); min-height: 0; gap: .55rem; }
+  .trace-picker, .power-monitor { padding: .55rem; }
+  .telemetry-auxiliary { display: grid; grid-template-rows: min-content minmax(0, 1fr); min-height: 0; gap: .55rem; overflow: auto; scrollbar-width: thin; }
+  .telemetry-auxiliary .field-map-section { padding: .55rem; }.telemetry-auxiliary .field-map-signal { display: none; }.telemetry-auxiliary .field-map-layout { grid-template-columns: minmax(8rem, 10rem) minmax(0, 1fr); gap: .45rem; }.telemetry-auxiliary .field-map { width: min(100%, 10rem); }.telemetry-auxiliary .field-map-values { gap: .25rem .45rem; }
+}
 .capture-button { margin-left: auto; padding: .35rem .6rem; background: #7a3fc4; font-size: .72rem; }.capture-button:hover { background: #9658df; }.capture-button:disabled { background: #58327e; }
 .motor-monitor-section { padding: .75rem; }
 .motor-monitor-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: .55rem; }
 .motor-monitor-section-heading h2 { margin: .1rem 0 0; }
 .motor-monitor-section-heading > span { color: #9eb4c8; font: .68rem ui-monospace, monospace; text-transform: uppercase; letter-spacing: .08em; }
-.motor-monitor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: .55rem; }
+.motor-monitor-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .55rem; }
 .motor-monitor-card { min-width: 0; padding: .7rem; border: 1px solid #2b5272; border-radius: 9px; background: linear-gradient(135deg, #0b2138, #091a2e); }
 .motor-monitor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: .6rem; margin-bottom: .55rem; }
 .motor-monitor-heading .eyebrow { margin-bottom: .1rem; font-size: .58rem; }
@@ -77,6 +116,34 @@ label { display: grid; gap: .35rem; font-size: .8rem; font-weight: 700; color: #
 .motor-metrics > div { min-width: 0; padding-top: .3rem; border-top: 1px solid #1c3b56; }
 .motor-metrics dt { overflow: hidden; color: #8ea6bd; font-size: .61rem; text-overflow: ellipsis; white-space: nowrap; }
 .motor-metrics dd { margin: .08rem 0 0; overflow: hidden; color: #c9f2de; font: .76rem ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.motor-electrical-readout { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; padding: .38rem; border: 1px solid var(--current-color); border-radius: 6px; background: var(--current-surface); }
+.motor-electrical-readout > div { min-width: 0; }.motor-electrical-readout dt { color: #c3d6e8; }.motor-electrical-readout dd { color: #f2fbff; }
+
+/* Current is the shared color scale: 0 A is green, the configured limit is red.
+   The full-height columns make comparison between all eight motors immediate. */
+.power-monitor { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; padding: .75rem; overflow: hidden; }
+.power-monitor-heading { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin-bottom: .45rem; }.power-monitor-heading h2 { margin: .1rem 0 0; font-size: .95rem; }.power-monitor-heading > span { color: #9de6c4; font: .7rem ui-monospace, monospace; white-space: nowrap; }
+.power-bar-grid { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); align-items: stretch; gap: .3rem; min-height: 0; }
+.power-bar { display: grid; grid-template-rows: auto 10rem auto auto; align-items: center; min-width: 0; gap: .22rem; color: #dcecff; text-align: center; }
+.power-bar-name { overflow: hidden; color: #9db5cb; font: .58rem ui-monospace, monospace; font-weight: 800; letter-spacing: .02em; text-overflow: ellipsis; white-space: nowrap; }
+.power-bar-track { position: relative; height: 10rem; overflow: hidden; border: 1px solid var(--current-color); border-radius: 4px; background: repeating-linear-gradient(to top, #071727 0, #071727 calc(20% - 1px), #19344d calc(20% - 1px), #19344d 20%); }
+.power-bar-track i { position: absolute; inset: 2px; display: block; background: var(--current-color); box-shadow: 0 0 9px var(--current-color); transform: scaleY(var(--power-ratio)); transform-origin: bottom; transition: transform .12s linear, background-color .12s linear; }
+.power-bar strong { overflow: hidden; color: #eaf7ff; font: .58rem ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }.power-bar small { overflow: hidden; color: #a9c1d8; font: .54rem ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.power-monitor-note { margin: .45rem 0 0; color: #829bb4; font: .58rem ui-monospace, monospace; text-align: center; }
+
+/* Dense, instrument-style traces: a scrollable signal catalog and compact,
+   labeled plots leave room to compare current, power, velocity, and PID data. */
+.trace-picker { display: flex; flex-direction: column; min-height: 0; }
+.trace-picker-list { display: flex; flex: 1 1 auto; flex-direction: column; align-items: stretch; justify-content: flex-start; width: 100%; min-width: 0; max-width: 100%; min-height: 0; height: 0; margin-bottom: 0 !important; overflow-x: hidden; overflow-y: auto; scrollbar-color: #4baeff #0a192d; scrollbar-width: thin; }
+.trace-picker-list label { box-sizing: border-box; flex: 0 0 auto; width: 100%; min-width: 0; overflow: hidden; }
+.trace-picker-list label input { flex: 0 0 auto; }
+.trace-picker-list label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trace-stack { grid-template-rows: repeat(3, 8.5rem); align-content: start; overflow-y: auto; scrollbar-color: #4baeff #0a192d; scrollbar-width: thin; }
+.live-trace { min-height: 8.5rem; }
+.live-trace svg { height: calc(100% - 1.25rem); min-height: 6.25rem; }
+.trace-background { fill: #071727; }
+.trace-grid-line { stroke: #25465f; stroke-width: .7; shape-rendering: crispEdges; }
+.trace-grid-time { stroke: #315a77; stroke-dasharray: 2 2; }
 
 .field-map-section { padding: .75rem; }
 .field-map-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
@@ -170,6 +237,10 @@ label { display: grid; gap: .35rem; font-size: .8rem; font-weight: 700; color: #
 .topbar-camera.recording { border-color: #e15360; color: #ffd8dc; background: rgb(126 29 43 / .45); }
 .topbar-camera.recording .driver-dot { background: #ff5968; box-shadow: 0 0 12px #ff5968; }
 .adb-camera-panel { grid-column: 1 / -1; padding: .7rem .85rem; }
+.adb-camera-panel > summary { display: flex; align-items: center; justify-content: space-between; gap: .75rem; cursor: pointer; list-style: none; }.adb-camera-panel > summary::-webkit-details-marker { display: none; }
+.camera-panel-summary > span { display: grid; gap: .08rem; }.camera-panel-summary b { color: #e9f5ff; font-size: .82rem; }.camera-panel-summary small { color: #9eb4c8; font-size: .64rem; }.camera-panel-summary strong { color: #9de6c4; font: .64rem ui-monospace, monospace; letter-spacing: .07em; }
+.adb-camera-panel:not([open]) { padding: .5rem .7rem; }.adb-camera-panel[open] > summary { padding-bottom: .55rem; border-bottom: 1px solid #294865; }
+.camera-panel-body { padding-top: .55rem; }
 .adb-camera-panel .panel-heading { margin-bottom: .55rem; }
 .camera-preflight { margin: -.25rem 0 .55rem; color: #b9a978; font-size: .66rem; line-height: 1.4; }
 .camera-mode-controls { display: flex; align-items: end; gap: .65rem 1rem; flex-wrap: wrap; margin: -.2rem 0 .65rem; }
@@ -206,3 +277,63 @@ label { display: grid; gap: .35rem; font-size: .8rem; font-weight: 700; color: #
 .camera-runtime-actions button { padding: .42rem .6rem; font-size: .65rem; }
 .camera-error { margin: .35rem 0; color: #ff9ca6 !important; font-size: .7rem; }
 @media (max-width: 760px) { .camera-runtime { grid-template-columns: 1fr; align-items: stretch; } .camera-mode-controls, .direct-camera-settings { align-items: stretch; } }
+
+/* The dashboard receives the normalized servo command, but presents the
+   resulting indicator color so drivers do not have to interpret PWM values. */
+.rgb-light-panel { padding: .75rem; }
+.rgb-light-panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: .55rem; }
+.rgb-light-panel-heading h2 { margin: .1rem 0 0; }
+.rgb-light-panel-heading > span { color: #9eb4c8; font: .68rem ui-monospace, monospace; letter-spacing: .08em; }
+.rgb-light-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .5rem; }
+.rgb-light-card { display: flex; align-items: center; gap: .6rem; min-width: 0; padding: .55rem; border: 1px solid #2b5272; border-radius: 9px; background: linear-gradient(135deg, #0b2138, #091a2e); }
+.rgb-light-swatch { flex: 0 0 2.25rem; width: 2.25rem; height: 2.25rem; border: 2px solid rgb(235 248 255 / .72); border-radius: 50%; background: var(--light-color); box-shadow: 0 0 14px var(--light-color); }
+.rgb-light-card strong, .rgb-light-card small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rgb-light-card strong { color: #e9f5ff; font-size: .74rem; }.rgb-light-card small { margin-top: .15rem; color: #c9f2de; font: .66rem ui-monospace, monospace; }
+@media (min-width: 1051px) { .telemetry-live-column .rgb-light-panel { padding: .55rem; overflow: auto; scrollbar-width: thin; }.telemetry-live-column .rgb-light-panel-heading { margin-bottom: .3rem; }.telemetry-live-column .rgb-light-panel-heading h2 { font-size: .95rem; }.telemetry-live-column .rgb-light-card { padding: .4rem; }.telemetry-live-column .rgb-light-swatch { flex-basis: 1.7rem; width: 1.7rem; height: 1.7rem; } }
+
+.topbar-battery { padding: .26rem .42rem; border: 1px solid #3d6685; border-radius: 6px; color: #dff4ff; background: #102b43; font: .68rem ui-monospace, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Telemetry is an instrument panel: controls stay compact and the live data
+   owns the available height. */
+.telemetry-dashboard { grid-template-rows: auto min-content minmax(0, 1fr); gap: .45rem; padding: .5rem 0; }
+.telemetry-top-shell { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(28rem, .95fr); gap: 0; min-width: 0; }
+.telemetry-top-shell > .driver-topbar { min-width: 0; padding: .5rem .75rem; border-radius: 12px 0 0 12px; }
+.telemetry-top-shell > .opmode-control { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; min-width: 0; margin: 0; padding: .45rem .7rem; border-left: 1px solid #31506d; border-radius: 0 12px 12px 0; }
+.telemetry-top-shell > .opmode-control .panel-heading { display: contents; }
+.telemetry-top-shell > .opmode-control .panel-heading > div { display: contents; }
+.telemetry-top-shell > .opmode-control .panel-heading .eyebrow { display: none; }
+.telemetry-top-shell > .opmode-control .panel-heading h2 { margin: 0; color: #a9d9ff; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
+.telemetry-top-shell > .opmode-control .panel-heading > span { justify-self: end; margin-right: .5rem; color: #9de6c4; font: .66rem ui-monospace, monospace; }
+.telemetry-top-shell > .opmode-control select { min-width: 0; height: 2.1rem; }
+.telemetry-top-shell > .opmode-control .action-row { margin: 0; }
+.telemetry-top-shell > .opmode-control .action-row button { min-width: 4.8rem; margin-left: .5rem; }
+.telemetry-body { display: grid; grid-template-columns: minmax(10rem, 13rem) minmax(0, 1fr); min-height: 0; gap: .45rem; overflow: hidden; }
+.tcp-command-panel { align-content: start; min-height: 0; padding: .55rem; overflow: auto; scrollbar-width: thin; }
+.tcp-command-panel .panel-heading { align-items: center; margin: 0; }.tcp-command-panel .panel-heading strong { color: #a9d9ff; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }.tcp-command-panel .panel-heading > span { font-size: .62rem; }
+.tcp-command-panel .command-card-list { grid-template-columns: minmax(0, 1fr); margin-top: .45rem; }.tcp-command-panel .command-card { padding: .45rem; }.tcp-command-panel .command-card-heading { gap: .35rem; }.tcp-command-panel .command-card-heading .eyebrow, .tcp-command-panel .command-card-heading code, .tcp-command-panel .command-description { display: none; }
+.telemetry-workbench { min-height: 0; }
+.motor-monitor-section { display: grid; align-content: center; padding: .55rem; }
+.motor-monitor-card { padding: .45rem; }.motor-monitor-heading { align-items: center; margin-bottom: .35rem; }.motor-monitor-heading strong { font-size: .78rem; }.motor-monitor-heading > span { padding: .16rem .28rem; font-size: .54rem; }
+.motor-metrics { gap: .25rem .45rem; }.motor-metrics > div { padding-top: .22rem; }.motor-metrics dt { font-size: .58rem; }.motor-metrics dd { margin-top: .04rem; font-size: .7rem; }
+.motor-electrical-readout { grid-column: 1 / -1; }.motor-electrical-readout > div { min-width: 0; }.motor-electrical-readout dd { text-align: left; }
+.motor-monitor-aux { display: grid; grid-template-columns: minmax(11rem, .75fr) minmax(15rem, 1.25fr); gap: .35rem; margin-top: .35rem; }
+.motor-monitor-aux .rgb-light-panel, .motor-monitor-aux .field-map-section { min-width: 0; padding: .45rem; }
+.motor-monitor-aux .rgb-light-panel-heading { margin-bottom: .3rem; }.motor-monitor-aux .rgb-light-panel-heading .eyebrow, .motor-monitor-aux .field-map-heading .eyebrow { display: none; }.motor-monitor-aux .rgb-light-panel-heading h2, .motor-monitor-aux .field-map-heading h2 { margin: 0; font-size: .78rem; }
+.motor-monitor-aux .rgb-light-panel-heading > span { font-size: .55rem; }.motor-monitor-aux .rgb-light-grid { grid-template-columns: 1fr; gap: .28rem; }.motor-monitor-aux .rgb-light-card { gap: .4rem; padding: .35rem; }.motor-monitor-aux .rgb-light-swatch { flex-basis: 1.35rem; width: 1.35rem; height: 1.35rem; }.motor-monitor-aux .rgb-light-card strong { font-size: .65rem; }.motor-monitor-aux .rgb-light-card small { font-size: .58rem; }
+.motor-monitor-aux .field-map-heading { margin-bottom: .2rem; }.motor-monitor-aux .field-map-heading > span { padding: .12rem .22rem; font-size: .5rem; }.motor-monitor-aux .field-map-signal { display: none; }.motor-monitor-aux .field-map-layout { grid-template-columns: minmax(7rem, 9rem) minmax(0, 1fr); gap: .35rem; }.motor-monitor-aux .field-map { width: min(100%, 9rem); }.motor-monitor-aux .field-map-values { gap: .2rem .35rem; }.motor-monitor-aux .field-map-values > div { padding-top: .18rem; }.motor-monitor-aux .field-map-values dt { font-size: .52rem; }.motor-monitor-aux .field-map-values dd { font-size: .64rem; }
+.telemetry-editor { grid-template-columns: minmax(0, 1fr); min-height: 0; gap: .35rem; }.telemetry-editor.trace-picker-open { grid-template-columns: minmax(12rem, .38fr) minmax(0, 1.62fr); }
+.trace-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; gap: .12rem; }.trace-toolbar { display: flex; justify-content: flex-end; min-height: 1.45rem; }.trace-picker-toggle { align-self: center; padding: .2rem .45rem; border: 1px solid #365b7e; border-radius: 5px; color: #a9d9ff; background: #0a1d32; font-size: .61rem; font-weight: 800; }.trace-picker-toggle:hover { border-color: #65bfff; color: #effaff; }
+.trace-picker { min-height: 0; padding: .5rem; }.trace-picker > div:first-child { margin-bottom: .3rem; }.trace-picker-list { height: 0; }.trace-stack { grid-template-rows: repeat(3, minmax(0, 1fr)); align-content: stretch; height: 100%; min-height: 0; gap: .12rem; overflow: hidden; }.live-trace { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; padding: .38rem .55rem; }.live-trace > div { min-height: 1rem; }.live-trace svg { height: 100%; min-height: 0; }.live-trace strong { font-size: .72rem; }
+.power-monitor { position: relative; grid-template-rows: minmax(0, 1fr); padding: .55rem; }.power-monitor-voltage { position: absolute; top: .48rem; right: .55rem; z-index: 1; color: #9de6c4; font: .68rem ui-monospace, monospace; }.power-bar-grid { padding-top: .95rem; }.power-bar { grid-template-rows: auto minmax(6rem, 1fr) auto auto; }.power-bar-track { height: 100%; min-height: 6rem; }.power-monitor-note, .power-monitor-heading { display: none; }
+
+@media (max-width: 1050px) {
+  .telemetry-dashboard { height: auto; min-height: 100dvh; overflow: visible; }
+  .telemetry-top-shell, .telemetry-body { grid-template-columns: 1fr; gap: .45rem; overflow: visible; }
+  .telemetry-top-shell > .driver-topbar, .telemetry-top-shell > .opmode-control { border-radius: 12px; border-left: 1px solid #31506d; }
+  .telemetry-body { min-height: auto; }.tcp-command-panel { max-height: 18rem; }.telemetry-workbench { overflow: visible; }
+}
+@media (max-width: 700px) {
+  .telemetry-top-shell > .opmode-control { grid-template-columns: 1fr auto; }.telemetry-top-shell > .opmode-control .panel-heading { display: none; }.telemetry-top-shell > .opmode-control select { grid-column: 1; }.telemetry-top-shell > .opmode-control .action-row { grid-column: 2; grid-row: 1; }
+  .telemetry-editor.trace-picker-open { grid-template-columns: 1fr; }.trace-picker { max-height: 14rem; }
+  .motor-monitor-aux { grid-template-columns: 1fr; }
+}

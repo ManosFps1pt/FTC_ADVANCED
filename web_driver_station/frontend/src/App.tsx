@@ -19,6 +19,7 @@ type RobotDataStatus = {
   connected: boolean;
   connection_count: number;
   peers: { host: string; port: number }[];
+  debug?: { manifest: unknown | null };
   recording: {
     uploads: Record<string, {
       state: string;
@@ -88,6 +89,8 @@ type DirectCaptureSettings = {
   facing: "front" | "back" | "external" | null;
   aspect_ratio: string | null;
   fps: number;
+  max_size: number | null;
+  video_bit_rate: string;
   flip: boolean;
 };
 
@@ -188,7 +191,7 @@ const emptyAdbCameraStatus = (): AdbCameraStatus => ({
 });
 
 const emptyCaptureStatus = (): CameraCaptureStatus => ({
-  config: { mode: "scrcpy_direct", direct: { facing: "back", aspect_ratio: null, fps: 60, flip: false } },
+  config: { mode: "scrcpy_direct", direct: { facing: "back", aspect_ratio: null, fps: 30, max_size: 1280, video_bit_rate: "4M", flip: false } },
   recording: false,
   capture_id: null,
   telemetry_session_id: null,
@@ -284,6 +287,20 @@ function sameTelemetry(left: Telemetry | null, right: Telemetry | null): boolean
   return left === right || (left !== null && right !== null && left.timestamp_ms === right.timestamp_ms);
 }
 
+function batteryVoltageFromTelemetry(telemetry: Telemetry | null): number | null {
+  if (!telemetry) return null;
+  const isBatteryVoltage = (key: string) => {
+    const normalized = key.toLowerCase().replace(/[^a-z]/g, "");
+    return (normalized.includes("battery") && (normalized.includes("voltage") || normalized.includes("level")))
+      || normalized === "battvolt"
+      || normalized === "voltage";
+  };
+  const numeric = telemetry.numbers.find(([key, value]) => isBatteryVoltage(key) && Number.isFinite(value));
+  if (numeric) return numeric[1];
+  const rendered = telemetry.strings.find(([key, value]) => isBatteryVoltage(key) && /-?\d+(?:\.\d+)?/.test(value));
+  return rendered ? Number.parseFloat(rendered[1]) : null;
+}
+
 function sameStatus(left: Status, right: Status): boolean {
   return left.connected === right.connected
     && left.host === right.host
@@ -368,6 +385,47 @@ function Axis({
   );
 }
 
+function OpModeControl({
+  connected,
+  busy,
+  opmode,
+  opmodes,
+  robotState,
+  startedOpmode,
+  onOpmodeChange,
+  onLifecycleAction,
+}: {
+  connected: boolean;
+  busy: boolean;
+  opmode: string;
+  opmodes: Record<string, unknown>[];
+  robotState: string;
+  startedOpmode: boolean;
+  onOpmodeChange: (value: string) => void;
+  onLifecycleAction: () => void;
+}) {
+  const lifecycleAction = startedOpmode || robotState === "RUNNING"
+    ? { label: "Stop", className: "danger", requiresOpmode: false }
+    : robotState === "INIT"
+      ? { label: "Start", className: "primary", requiresOpmode: true }
+      : { label: "Init", className: "primary", requiresOpmode: true };
+
+  return <section className="lifecycle panel opmode-control">
+    <div className="panel-heading"><div><p className="eyebrow">Driver Station control</p><h2>OpMode</h2></div><span>{startedOpmode ? "RUNNING" : robotState}</span></div>
+    <select value={opmode} disabled={!connected || busy} onChange={(event) => onOpmodeChange(event.target.value)}>
+      <option value="">Select an OpMode</option>
+      {opmodes.map((item) => (
+        <option key={String(item.name)} value={String(item.name)}>
+          {String(item.name)} · {String(item.flavor ?? "UNKNOWN")}
+        </option>
+      ))}
+    </select>
+    <div className="action-row">
+      <button className={lifecycleAction.className} type="button" disabled={!connected || busy || (lifecycleAction.requiresOpmode && !opmode)} onClick={onLifecycleAction}>{lifecycleAction.label}</button>
+    </div>
+  </section>;
+}
+
 function RecordingUploadModal({
   sessionId,
   uploadState,
@@ -437,7 +495,13 @@ function DirectCameraPreview({ active, detail }: { active: boolean; detail: stri
   </div>;
 }
 
-function DriverStationPage({ page }: { page: "driver" | "configuration" | "telemetry" | "debug" }) {
+function DriverStationPage({
+  page,
+  onTcpWorkspaceRequested,
+}: {
+  page: "driver" | "configuration" | "telemetry" | "debug";
+  onTcpWorkspaceRequested: (page: "telemetry" | "debug") => void;
+}) {
   const [host, setHost] = useState("192.168.43.1");
   const [status, setStatus] = useState<Status>({
     connected: false,
@@ -458,6 +522,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
   const [recordingBusy, setRecordingBusy] = useState(false);
   const [adbBusy, setAdbBusy] = useState(false);
   const [pingMs, setPingMs] = useState<number | null>(null);
+  const [batteryVoltage, setBatteryVoltage] = useState<number | null>(null);
   const [robotData, setRobotData] = useState<RobotDataStatus>({
     listening: false,
     connected: false,
@@ -472,9 +537,17 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
   const shortcutKeysRef = useRef<Set<string>>(new Set());
   const lastPhysicalStatesRef = useRef<Record<1 | 2, GamepadState | null>>({ 1: null, 2: null });
   const directDraftDirtyRef = useRef(false);
+  const tcpWorkspaceRef = useRef<"telemetry" | "debug" | null>(null);
+  const driverStationConnectedRef = useRef(false);
 
   const connected = status.connected;
+  // FTC accepts driver input after an OpMode has been initialized. Keep every
+  // controller neutral outside that lifecycle window, rather than merely
+  // disabling controls that can still occupy the dashboard.
+  const opModeAcceptsGamepad = status.started_opmode || status.robot_state === "INIT" || status.robot_state === "RUNNING";
+  const gamepadEnabled = connected && opModeAcceptsGamepad;
   const physicalMode = physicalControllers.length > 0;
+  const gamepadPanelVisible = gamepadEnabled && !physicalMode;
   const recordingUploads = Object.entries(robotData.recording?.uploads ?? {}).filter(([sessionId]) => sessionId !== "configuration");
   const pendingRecording = recordingUploads.find(([, upload]) => upload.state === "ready_to_upload" || upload.state === "error");
   const latestUpload = recordingUploads.length ? recordingUploads[recordingUploads.length - 1] : null;
@@ -564,6 +637,15 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
   }, [connected]);
 
   useEffect(() => {
+    if (!connected) {
+      setBatteryVoltage(null);
+      return;
+    }
+    const nextVoltage = batteryVoltageFromTelemetry(status.telemetry);
+    if (nextVoltage !== null) setBatteryVoltage(nextVoltage);
+  }, [connected, status.telemetry]);
+
+  useEffect(() => {
     const scheme = window.location.protocol === "https:" ? "wss" : "ws";
     const socket = new WebSocket(`${scheme}://${window.location.host}/ws`);
     socket.onmessage = (event: MessageEvent<string>) => {
@@ -588,6 +670,17 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     };
     return () => socket.close();
   }, []);
+
+  useEffect(() => {
+    if (!robotData.connected) {
+      tcpWorkspaceRef.current = null;
+      return;
+    }
+    const target = robotData.debug?.manifest ? "debug" : "telemetry";
+    if (tcpWorkspaceRef.current === target) return;
+    tcpWorkspaceRef.current = target;
+    onTcpWorkspaceRequested(target);
+  }, [onTcpWorkspaceRequested, robotData.connected, robotData.debug?.manifest]);
 
   useEffect(() => {
     let active = true;
@@ -638,7 +731,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
       }
       shortcutKeysRef.current = heldShortcuts;
 
-      if (connected && document.hasFocus()) {
+      if (gamepadEnabled && document.hasFocus()) {
         const activeAssignments = assignmentsRef.current;
         for (const driver of [1, 2] as const) {
           const controllerIndex = activeAssignments[driver];
@@ -668,10 +761,10 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
       active = false;
       window.cancelAnimationFrame(animationFrame);
     };
-  }, [assignController, connected, updateAssignments]);
+  }, [assignController, connected, gamepadEnabled, updateAssignments]);
 
   useEffect(() => {
-    if (!connected || physicalMode) return;
+    if (!gamepadEnabled || physicalMode) return;
     const timer = window.setTimeout(() => {
       void api<void>(`/gamepads/${user}`, {
         method: "PUT",
@@ -679,7 +772,17 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
       }).catch((error: Error) => setNotice(error.message));
     }, 15);
     return () => window.clearTimeout(timer);
-  }, [connected, gamepad, physicalMode, user]);
+  }, [gamepadEnabled, gamepad, physicalMode, user]);
+
+  useEffect(() => {
+    if (gamepadEnabled) return;
+    setGamepad(neutralGamepad());
+    lastPhysicalStatesRef.current = { 1: null, 2: null };
+    if (connected) {
+      void api<void>("/gamepads/1/clear", { method: "POST" });
+      void api<void>("/gamepads/2/clear", { method: "POST" });
+    }
+  }, [connected, gamepadEnabled]);
 
   useEffect(() => {
     if (!physicalMode) return;
@@ -726,6 +829,13 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     // It is not a user OpMode, so never preselect it when a session connects.
     setOpmode("");
   };
+
+  useEffect(() => {
+    if (connected && !driverStationConnectedRef.current) {
+      void loadOpmodes().catch((error: Error) => setNotice(error.message));
+    }
+    driverStationConnectedRef.current = connected;
+  }, [connected]);
 
   const runAction = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -884,11 +994,16 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
     return init();
   };
 
-  const lifecycleAction = status.started_opmode || status.robot_state === "RUNNING"
-    ? { label: "Stop", className: "danger", requiresOpmode: false }
-    : status.robot_state === "INIT"
-      ? { label: "Start", className: "primary", requiresOpmode: true }
-      : { label: "Init", className: "primary", requiresOpmode: true };
+  const opModeControl = <OpModeControl
+    connected={connected}
+    busy={busy}
+    opmode={opmode}
+    opmodes={opmodes}
+    robotState={status.robot_state}
+    startedOpmode={status.started_opmode}
+    onOpmodeChange={setOpmode}
+    onLifecycleAction={() => void runLifecycleAction()}
+  />;
 
   const releaseAll = () =>
     runAction(async () => {
@@ -942,7 +1057,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
   const topbar = <header className="driver-topbar panel">
     <div className="driver-brand"><p className="eyebrow">Local lab dashboard</p><h1>FTC Driver Station</h1></div>
     <div className="topbar-status" aria-label="Driver Station status">
-      <div className={`connection ${connected ? "online" : "offline"}`}><span className="status-dot" />{connected ? `Connected · ${status.robot_state}` : "Disconnected"}{connected && <span className="ping">Ping {pingMs === null ? "—" : `${pingMs.toFixed(1)} ms`}</span>}</div>
+      <div className={`connection ${connected ? "online" : "offline"}`}><span className="status-dot" />{connected ? `Connected · ${status.robot_state}` : "Disconnected"}{connected && <span className="ping">Ping {pingMs === null ? "—" : `${pingMs.toFixed(1)} ms`}</span>}{connected && <span className="topbar-battery">Battery {batteryVoltage === null ? "—" : `${batteryVoltage.toFixed(2)} V`}</span>}</div>
       <div className="topbar-drivers" aria-label="Controller status">
         {([1, 2] as const).map((driver) => { const assigned = controllerName(assignments[driver]); return <span className={assigned ? "active" : ""} key={driver}><i className="driver-dot" />D{driver}: {assigned ? "Ready" : physicalMode ? "Unassigned" : user === driver ? "Virtual" : "Available"}</span>; })}
       </div>
@@ -971,26 +1086,11 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
         <p className="notice" aria-live="polite">{notice}</p>
       </section>
 
-      <section className="lifecycle panel">
-        <div className="panel-heading"><h2>OpMode</h2><span>{status.started_opmode ? "RUNNING" : status.robot_state}</span></div>
-        <select value={opmode} disabled={!connected || busy} onChange={(event) => setOpmode(event.target.value)}>
-          <option value="">Select an OpMode</option>
-          {opmodes.map((item) => (
-            <option key={String(item.name)} value={String(item.name)}>
-              {String(item.name)} · {String(item.flavor ?? "UNKNOWN")}
-            </option>
-          ))}
-        </select>
-        <div className="action-row">
-          <button className={lifecycleAction.className} type="button" disabled={!connected || busy || (lifecycleAction.requiresOpmode && !opmode)} onClick={() => void runLifecycleAction()}>{lifecycleAction.label}</button>
-        </div>
-      </section>
+      {opModeControl}
 
-      <section className="adb-camera-panel panel">
-        <div className="panel-heading">
-          <div><p className="eyebrow">Camera capture</p><h2>{directMode ? "Direct scrcpy" : "ADB Volume Up"}</h2></div>
-          <span>{cameraSummary.toUpperCase()}</span>
-        </div>
+      <details className="adb-camera-panel panel" open={cameraWorking || captureCamera.preview.running || nativeCameraWorking || undefined}>
+        <summary className="camera-panel-summary"><span><b>Camera capture</b><small>{directMode ? "Direct scrcpy" : "ADB Volume Up"}</small></span><strong>{cameraSummary.toUpperCase()}</strong></summary>
+        <div className="camera-panel-body">
         <div className="camera-mode-controls">
           <label>Capture mode
             <select value={captureCamera.config.mode} disabled={roleChangesLocked} onChange={(event) => void saveCaptureConfig(event.target.value as CaptureMode)}>
@@ -1013,6 +1113,16 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
           </label>
           <label>Recording FPS
             <input type="number" min="1" max="120" step="1" value={directDraft.fps} disabled={roleChangesLocked} onChange={(event) => editDirectCapture({ fps: Number(event.target.value) || 1 })} />
+          </label>
+          <label>Max resolution
+            <select value={directDraft.max_size ?? ""} disabled={roleChangesLocked} onChange={(event) => editDirectCapture({ max_size: event.target.value ? Number(event.target.value) : null })}>
+              <option value="">Camera native</option><option value="960">960p max side</option><option value="1280">720p · fast replay</option><option value="1920">1080p</option>
+            </select>
+          </label>
+          <label>Video bitrate
+            <select value={directDraft.video_bit_rate} disabled={roleChangesLocked} onChange={(event) => editDirectCapture({ video_bit_rate: event.target.value })}>
+              <option value="4M">4 Mb/s · fast replay</option><option value="6M">6 Mb/s</option><option value="8M">8 Mb/s</option><option value="16M">16 Mb/s · high quality</option>
+            </select>
           </label>
           <label className="camera-flip"><input type="checkbox" checked={directDraft.flip} disabled={roleChangesLocked} onChange={(event) => editDirectCapture({ flip: event.target.checked })} /> Flip video</label>
           <button className="secondary" type="button" disabled={roleChangesLocked} onClick={() => void saveCaptureConfig("scrcpy_direct", directDraft)}>Save camera settings</button>
@@ -1073,11 +1183,12 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
           </div>
         </div>}
         {directMode && captureCamera.preview.running && <div className="camera-runtime-actions direct-preview-actions"><button className="secondary" type="button" disabled={adbBusy} onClick={() => void stopDirectPreview()}>Stop preview</button></div>}
-      </section>
+        </div>
+      </details>
       </section>
 
       <section className="dashboard-grid">
-        {!physicalMode && <section className="gamepad panel">
+        {gamepadPanelVisible && <section className="gamepad panel">
           <div className="panel-heading">
             <div><p className="eyebrow">Virtual input</p><h2>Gamepad {user}</h2></div>
             <button className="secondary" type="button" disabled={!connected || busy} onClick={() => void switchGamepad()}>
@@ -1126,7 +1237,7 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
         </section>
         }
 
-        <aside className={`telemetry panel ${physicalMode ? "telemetry-wide" : ""} ${opmodeError ? "telemetry-opmode-error" : ""}`} aria-live="polite">
+        <aside className={`telemetry panel ${!gamepadPanelVisible ? "telemetry-wide" : ""} ${opmodeError ? "telemetry-opmode-error" : ""}`} aria-live="polite">
           <div className="panel-heading"><div><p className="eyebrow">{opmodeError ? "Robot Controller diagnostic" : "Live stream"}</p><h2>{opmodeError ? "OpMode Error" : "Telemetry"}</h2></div><span>{opmodeError ? "EXCEPTION" : status.telemetry?.state ?? "WAITING"}</span></div>
           {opmodeError ? (
             <div className="opmode-error-body">
@@ -1150,8 +1261,8 @@ function DriverStationPage({ page }: { page: "driver" | "configuration" | "telem
       <nav className="workspace-nav" aria-label="Application pages"><a href="#/">Driver Station</a><a className="current" href="#/configure">Configure Robot</a><a href="#/telemetry">Telemetry Lab</a></nav>
       <RobotConfiguration connected={connected} robotState={status.robot_state} startedOpmode={status.started_opmode} />
     </main>}
-    {page === "telemetry" && <TelemetryDashboard topbar={topbar} />}
-    {page === "debug" && <DebuggerPage />}
+    {page === "telemetry" && <TelemetryDashboard topbar={topbar} opModeControl={opModeControl} />}
+    {page === "debug" && <DebuggerPage opModeControl={opModeControl} />}
     {pendingRecording && <RecordingUploadModal
       sessionId={pendingRecording[0]}
       uploadState={pendingRecording[1]}
@@ -1177,12 +1288,18 @@ function App() {
     return () => window.removeEventListener("hashchange", updatePage);
   }, []);
 
+  const showTcpWorkspace = useCallback((nextPage: "telemetry" | "debug") => {
+    const hash = nextPage === "debug" ? "#/debugger" : "#/telemetry";
+    if (window.location.hash === hash) return;
+    window.location.hash = hash;
+  }, []);
+
   // Keep the Driver Station mounted while viewing telemetry. Its physical
   // gamepad polling and Robocol forwarding are part of the control session,
   // not the visible Driver Station page.
   return (
     <>
-      <DriverStationPage page={page} />
+      <DriverStationPage page={page} onTcpWorkspaceRequested={showTcpWorkspace} />
     </>
   );
 }

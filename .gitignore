@@ -50,6 +50,9 @@ google-services.json
 .venv-web/
 .venv/
 mcp_server/.venv/
+discord_bot/.venv/
+discord_bot/.env
+ftc_advanced.local.json
 mcp_server/tunnel-client/*.exe
 mcp_server/tunnel-client/*.zip
 .pnpm-store/

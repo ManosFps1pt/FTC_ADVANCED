@@ -98,13 +98,17 @@ class CameraRecordingCoordinatorTests(unittest.TestCase):
             preview = fake.calls[-1]
             self.assertFalse(preview[2])
             self.assertTrue(preview[3])
-            self.assertEqual(60, preview[0].fps)
+            self.assertEqual(30, preview[0].fps)
+            self.assertEqual(1280, preview[0].max_size)
+            self.assertEqual("4M", preview[0].video_bit_rate)
 
             coordinator.start_recording()
             recording = fake.calls[-1]
             self.assertFalse(recording[2])
             self.assertFalse(recording[3])
-            self.assertEqual(60, recording[0].fps)
+            self.assertEqual(30, recording[0].fps)
+            self.assertEqual(1280, recording[0].max_size)
+            self.assertEqual("4M", recording[0].video_bit_rate)
             session_id = str(uuid.uuid4())
             coordinator.bind_telemetry_session(session_id)
             coordinator.stop_recording()
@@ -138,6 +142,17 @@ class CameraRecordingCoordinatorTests(unittest.TestCase):
             self.assertEqual(1, adb.native_starts)
             self.assertFalse(fake.running)
 
+    def test_fast_replay_defaults_limit_frame_rate_resolution_and_bitrate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            coordinator, _fake, _adb, _finalized = self.make_coordinator(root)
+
+            direct = coordinator.config_dict()["direct"]
+
+            self.assertEqual(30, direct["fps"])
+            self.assertEqual(1280, direct["max_size"])
+            self.assertEqual("4M", direct["video_bit_rate"])
+
     def test_preview_falls_back_to_camera_default_when_requested_aspect_is_unsupported(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -146,7 +161,7 @@ class CameraRecordingCoordinatorTests(unittest.TestCase):
             coordinator._scrcpy = fallback
             coordinator.update_config(
                 mode="scrcpy_direct",
-                direct={"facing": "back", "aspect_ratio": "16:9", "fps": 60, "flip": False},
+                direct={"facing": "back", "aspect_ratio": "16:9", "fps": 60, "max_size": 1920, "video_bit_rate": "16M", "flip": False},
             )
 
             self.assertIsNone(coordinator.config_dict()["direct"]["aspect_ratio"])

@@ -64,16 +64,16 @@ For an explicit retry/upload, run:
 ```powershell
 .\.venv-web\Scripts\python.exe -m web_driver_station.backend.recording_uploader `
   .\web_driver_station\recordings\<session-uuid> `
-  --host 80.225.93.186 --username ubuntu `
-  --private-key '.\ssh-key-2026-08-20 (1).key'
+  --host your-oracle-public-ip --username ubuntu `
+  --private-key '.\your-upload-key.key'
 ```
 
-For automatic upload, set `FTC_RECORDING_UPLOAD_HOST`,
-`FTC_RECORDING_UPLOAD_USERNAME`, and `FTC_RECORDING_UPLOAD_PRIVATE_KEY` before
-starting the Driver Station backend. Optional `FTC_RECORDING_UPLOAD_ROOT`,
-`FTC_RECORDING_UPLOAD_PORT`, and `FTC_RECORDING_UPLOAD_KNOWN_HOSTS` override
-their safe defaults. The SSH host must already be in the selected known-hosts
-file; the uploader never silently trusts a new server key.
+For automatic upload, copy `ftc_advanced.local.example.json` to the ignored
+`ftc_advanced.local.json` file and fill in `recording_upload`. Environment
+variables (`FTC_RECORDING_UPLOAD_*`) still override the local file. The SSH
+host is verified against the configured `host_key_fingerprint`; the uploader
+never silently trusts a new server key. The legacy `known_hosts` option remains
+available for environments that need it.
 
 ## Hosted HTTPS
 

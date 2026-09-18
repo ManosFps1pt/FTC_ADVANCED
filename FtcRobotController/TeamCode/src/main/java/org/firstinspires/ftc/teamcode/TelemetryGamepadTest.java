@@ -6,6 +6,7 @@ import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.data.StructuredRobotDataClient;
 
+import java.util.Map;
 import java.util.Random;
 
 /**
@@ -19,6 +20,21 @@ import java.util.Random;
 public class TelemetryGamepadTest extends OpMode {
     private static final double FIELD_SIZE_INCHES = 144.0;
     private static final double ROBOT_HALF_WIDTH_INCHES = 9.0;
+    private static final String RGB_LIGHT_DEVICE_ID = "indicator.rgb1";
+    private static final String RGB_LIGHT_DUTY_CYCLE_SIGNAL_ID = RGB_LIGHT_DEVICE_ID + ".dutyCycle";
+    private static final MockRgbLightState[] RGB_LIGHT_STATES = {
+            new MockRgbLightState("Off", 0.000),
+            new MockRgbLightState("Red", 0.277),
+            new MockRgbLightState("Orange", 0.333),
+            new MockRgbLightState("Yellow", 0.388),
+            new MockRgbLightState("Sage", 0.444),
+            new MockRgbLightState("Green", 0.500),
+            new MockRgbLightState("Azure", 0.555),
+            new MockRgbLightState("Blue", 0.611),
+            new MockRgbLightState("Indigo", 0.666),
+            new MockRgbLightState("Violet", 0.722),
+            new MockRgbLightState("White", 1.000),
+    };
     private final ElapsedTime runtime = new ElapsedTime();
     private final Random random = new Random();
     private StructuredRobotDataClient dataClient;
@@ -26,6 +42,8 @@ public class TelemetryGamepadTest extends OpMode {
     private double mockY;
     private double mockHeadingRad;
     private double lastMockPoseUpdateSeconds = Double.NEGATIVE_INFINITY;
+    private MockRgbLightState mockRgbLightState = RGB_LIGHT_STATES[0];
+    private double lastMockRgbLightUpdateSeconds = Double.NEGATIVE_INFINITY;
 
     @Override
     public void init() {
@@ -33,6 +51,12 @@ public class TelemetryGamepadTest extends OpMode {
                 .addRuntime(runtime)
                 .addPose("localization", "Mock Localization", () ->
                         StructuredRobotDataClient.PoseValue.of(mockX, mockY, mockHeadingRad))
+                // This test deliberately does not bind hardware. It models the exact
+                // normalized servo command a goBILDA RGB Indicator Light receives.
+                .addDevice(RGB_LIGHT_DEVICE_ID, "Mock RGB Indicator", "indicators",
+                        "goBILDA RGB indicator light (servo PWM)")
+                .addSignal(RGB_LIGHT_DUTY_CYCLE_SIGNAL_ID, "Mock RGB Indicator Duty Cycle",
+                        RGB_LIGHT_DEVICE_ID, "dutyCycle", "normalized", "float64", "command", 1)
                 .addGamepads(gamepad1, gamepad2);
         dataClient.start();
 
@@ -49,15 +73,19 @@ public class TelemetryGamepadTest extends OpMode {
     public void start() {
         runtime.reset();
         lastMockPoseUpdateSeconds = Double.NEGATIVE_INFINITY;
+        lastMockRgbLightUpdateSeconds = Double.NEGATIVE_INFINITY;
         updateMockPose();
+        updateMockRgbLight();
     }
 
     @Override
     public void loop() {
         updateMockPose();
+        updateMockRgbLight();
         telemetry.addData("runtime (s)", "%.1f", runtime.seconds());
         telemetry.addData("mock pose", "X %.1f  Y %.1f  H %.0f°",
                 mockX, mockY, Math.toDegrees(mockHeadingRad));
+        telemetry.addData("mock RGB indicator", mockRgbLightState.label);
         telemetry.addData("gamepad1 sticks", "LX %.2f  LY %.2f  RX %.2f  RY %.2f",
                 gamepad1.left_stick_x,
                 gamepad1.left_stick_y,
@@ -92,8 +120,11 @@ public class TelemetryGamepadTest extends OpMode {
             telemetry.addData("Data TCP error", dataClient.getLastError());
         }
 
-        // Call once per FTC loop. The bound client captures runtime and both gamepads.
-        dataClient.publishLoop();
+        // Call once per FTC loop. This is a complete catalog snapshot: standard
+        // runtime/pose values plus the mock RGB light's normalized servo command.
+        Map<String, Object> snapshot = dataClient.createDataSnapshot();
+        snapshot.put(RGB_LIGHT_DUTY_CYCLE_SIGNAL_ID, mockRgbLightState.dutyCycle);
+        dataClient.publishLoop(snapshot, gamepad1, gamepad2);
         telemetry.update();
     }
 
@@ -113,5 +144,21 @@ public class TelemetryGamepadTest extends OpMode {
                 * (FIELD_SIZE_INCHES - 2.0 * ROBOT_HALF_WIDTH_INCHES);
         mockHeadingRad = random.nextDouble() * 2.0 * Math.PI;
         lastMockPoseUpdateSeconds = runtime.seconds();
+    }
+
+    private void updateMockRgbLight() {
+        if (runtime.seconds() - lastMockRgbLightUpdateSeconds < 1.0) return;
+        mockRgbLightState = RGB_LIGHT_STATES[random.nextInt(RGB_LIGHT_STATES.length)];
+        lastMockRgbLightUpdateSeconds = runtime.seconds();
+    }
+
+    private static final class MockRgbLightState {
+        final String label;
+        final double dutyCycle;
+
+        MockRgbLightState(String label, double dutyCycle) {
+            this.label = label;
+            this.dutyCycle = dutyCycle;
+        }
     }
 }

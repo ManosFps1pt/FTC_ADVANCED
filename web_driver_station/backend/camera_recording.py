@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -29,7 +30,9 @@ class CameraRecordingError(RuntimeError):
 class DirectScrcpySettings:
     facing: str | None = "back"
     aspect_ratio: str | None = None
-    fps: int = 60
+    fps: int = 30
+    max_size: int | None = 1280
+    video_bit_rate: str = "4M"
     flip: bool = False
 
     def options(self, serial: str) -> CameraOptions:
@@ -41,6 +44,8 @@ class DirectScrcpySettings:
             facing=self.facing or None,
             aspect_ratio=self.aspect_ratio or None,
             fps=self.fps,
+            max_size=self.max_size,
+            video_bit_rate=self.video_bit_rate,
             flip=self.flip,
             audio=False,
         )
@@ -125,7 +130,9 @@ class CameraRecordingCoordinator:
         values = {
             "facing": _optional_facing(direct.get("facing")),
             "aspect_ratio": _optional_string(direct.get("aspect_ratio")),
-            "fps": _fps(direct.get("fps", 60)),
+            "fps": _fps(direct.get("fps", 30)),
+            "max_size": _max_size(direct.get("max_size", 1280)),
+            "video_bit_rate": _video_bit_rate(direct.get("video_bit_rate", "4M")),
             "flip": _bool(direct.get("flip", False), "flip"),
         }
         next_config = CameraCaptureConfig(mode=mode, direct=DirectScrcpySettings(**values))
@@ -244,6 +251,19 @@ class CameraRecordingCoordinator:
                 capture_id=capture_id, mode="scrcpy_direct", staging_path=staging_path,
                 started_monotonic_ns=time.perf_counter_ns(),
             )
+            return self.status()
+
+    def ensure_recording(self, telemetry_session_id: str | None = None) -> dict[str, Any]:
+        """Start one capture if needed and attach it to a known telemetry run.
+
+        This is deliberately idempotent: Init and the first TCP hello can race,
+        but they must refer to one video, never start two camera recordings.
+        """
+        with self._lock:
+            if self._active is None:
+                self.start_recording()
+            if telemetry_session_id is not None and self._active is not None:
+                self._active.telemetry_session_id = telemetry_session_id
             return self.status()
 
     def bind_telemetry_session(self, session_id: str) -> None:
@@ -432,6 +452,8 @@ class CameraRecordingCoordinator:
                 facing=direct.facing,
                 aspect_ratio=None,
                 fps=direct.fps,
+                max_size=direct.max_size,
+                video_bit_rate=direct.video_bit_rate,
                 flip=direct.flip,
             ),
         )
@@ -453,7 +475,9 @@ class CameraRecordingCoordinator:
                 direct=DirectScrcpySettings(
                     facing=_optional_facing(direct.get("facing", "back")),
                     aspect_ratio=_optional_string(direct.get("aspect_ratio")),
-                    fps=_fps(direct.get("fps", 60)),
+                    fps=_fps(direct.get("fps", 30)),
+                    max_size=_max_size(direct.get("max_size", 1280)),
+                    video_bit_rate=_video_bit_rate(direct.get("video_bit_rate", "4M")),
                     flip=_bool(direct.get("flip", False), "flip"),
                 ),
             )
@@ -485,6 +509,20 @@ def _optional_facing(value: Any) -> str | None:
 def _fps(value: Any) -> int:
     if type(value) is not int or not 1 <= value <= 120:
         raise CameraRecordingError("Framerate must be a whole number from 1 to 120")
+    return value
+
+
+def _max_size(value: Any) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int or not 16 <= value <= 7680:
+        raise CameraRecordingError("Maximum resolution must be a whole number from 16 to 7680")
+    return value
+
+
+def _video_bit_rate(value: Any) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[1-9]\d*[KMG]", value):
+        raise CameraRecordingError("Video bitrate must look like 4M, 800K, or 1G")
     return value
 
 

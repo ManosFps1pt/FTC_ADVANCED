@@ -6,12 +6,8 @@ set "WEB_VENV=%CD%\.venv-web"
 set "WEB_PYTHON=%WEB_VENV%\Scripts\python.exe"
 set "CODEX_RUNTIME=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies"
 
-rem Upload each finalized recording in the background. The Python uploader
-rem refuses unknown SSH host keys and only publishes a complete remote folder.
-set "FTC_RECORDING_UPLOAD_HOST=80.225.93.186"
-set "FTC_RECORDING_UPLOAD_USERNAME=ubuntu"
-set "FTC_RECORDING_UPLOAD_PRIVATE_KEY=%CD%\ssh-key-2026-08-20 (1).key"
-set "FTC_RECORDING_UPLOAD_KNOWN_HOSTS=%USERPROFILE%\.ssh\known_hosts"
+rem Upload settings are loaded from the ignored ftc_advanced.local.json file.
+rem Copy ftc_advanced.local.example.json and fill it locally before launching.
 
 rem When launched from Explorer, Codex's bundled tools are not necessarily on PATH.
 rem Put them first when available so Node.js and pnpm are always usable here.

@@ -103,10 +103,11 @@ still be healthy.
 
 The Camera capture panel uses the Android phone assigned the **camera** ADB
 role. **Direct scrcpy** is the default: it starts a small 240-pixel, 10-FPS
-idle preview when the dashboard starts, records at the configured FPS
-(60 by default) from OpMode Init through Stop, and resumes the preview after
-the MP4 finalizes. Its only camera controls are lens, aspect ratio, recording
-FPS, and flip. The preview can be stopped without changing the saved mode.
+idle preview when the dashboard starts, then records 720p-or-smaller video at
+30 FPS and 4 Mb/s by default from OpMode Init through Stop. This fast-replay
+preset is roughly 30 MB per minute. Choose 1080p, 60 FPS, and 16 Mb/s in the
+camera panel only when the extra quality is worth the larger upload. The
+preview can be stopped without changing the saved mode.
 
 **ADB Volume Up** remains available for phones whose OEM Camera app is the
 preferred recorder. It has no live preview, so it never competes with the
@@ -144,6 +145,22 @@ clip.
 
 Use `GET /api/data/recordings` to list saved sessions, and download a finalized
 file with `GET /api/data/recordings/{session-id}/stream-00000.ftclog`.
+
+## Per-device secrets and upload settings
+
+Copy `ftc_advanced.local.example.json` at the repository root to
+`ftc_advanced.local.json`, then fill in your own OpenAI keys, Discord token,
+and `recording_upload` server address. The local file is ignored by Git and
+can be copied separately between your laptops. Environment variables still
+override it for automation. Never put a real key in the example file.
+
+For uploads, use `recording_upload.host_key_fingerprint` rather than a
+device-specific `known_hosts` path. It is the Oracle SSH server's public
+identity fingerprint, not a private secret, and the uploader refuses a server
+whose key does not match. Obtain it once from a laptop that already trusts the
+server with `ssh-keygen -lf ~/.ssh/known_hosts` (or an equivalent OpenSSH
+command), then copy the `SHA256:...` value into the shared local JSON. If a
+legacy `known_hosts` setting remains in that file, the pinned fingerprint wins.
 
 ## Laptop video recording (first replay layer)
 

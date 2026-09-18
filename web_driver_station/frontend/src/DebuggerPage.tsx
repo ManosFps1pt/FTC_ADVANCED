@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { DebuggerReport, type Benchmark, type Result, type RunManifest } from "./debugger/Report";
 
 type Node = {id:string;parentId:string;label:string;description:string;kind:string;enabled:boolean;disabledReason:string};
@@ -37,7 +37,7 @@ function ManualMotorControls({toolId,ready,onNotice}:{toolId:string;ready:Status
   </section>;
 }
 
-export function DebuggerPage() {
+export function DebuggerPage({ opModeControl }: { opModeControl: ReactNode }) {
   const [manual,setManual]=useState(false),[status,setStatus]=useState<Status>({connected:false});
   const [mechanism,setMechanism]=useState(""),[tool,setTool]=useState(""),[runs,setRuns]=useState<RunManifest[]>([]);
   const [runId,setRunId]=useState(""),[result,setResult]=useState<Result|null>(null),[notice,setNotice]=useState("");
@@ -97,6 +97,7 @@ export function DebuggerPage() {
   const popup=result&&selectedRun?.storage?.state!=="complete"&&selectedRun?.storage?.state!=="uploading"&&!dismissed.includes(runId);
   return <main className="dbg-page">
     <header className="dbg-header"><div><p className="dbg-eyebrow">FTC Advanced · Debugger</p><h1>Mechanism benchmarks</h1><p>Run a repeatable experiment. Review the measurements that matter.</p></div><div className="dbg-actions"><button disabled={Boolean(active)} onClick={()=>void api("/launch",{name:"FTC Advanced Debugger"},"POST").then(()=>setNotice("Debugger launched. Waiting for its mechanism registry…")).catch(e=>setNotice(String(e)))}>Launch Debugger OpMode</button><a href="#/">Driver Station</a><a href="#/telemetry">Telemetry Lab</a></div></header>
+    <div className="debugger-opmode-control">{opModeControl}</div>
     {notice&&<div className="dbg-notice" role="status">{notice}</div>}
     <div className="dbg-layout"><aside className="dbg-nav"><p className="dbg-eyebrow">Registered mechanisms · {status.connected?"Connected":"Offline"}</p>{mechanisms.map(m=><button className={selectedMechanism===m.id?"selected":""} key={m.id} disabled={Boolean(active)} onClick={()=>{setMechanism(m.id);setTool("");setManual(false);}}>{m.label}</button>)}{!mechanisms.length&&<p>Launch the Debugger to receive the mechanism list.</p>}</aside>
     <section className="dbg-workbench"><h2>{nodes.find(n=>n.id===selectedMechanism)?.label??"Select a mechanism"}</h2><div className="dbg-tools">{tools.map(t=><article className="dbg-tool" key={t.id}><h3>{t.label}</h3><p>{t.description}</p>{!t.enabled&&<p>{t.disabledReason}</p>}<button disabled={!t.enabled||busy||Boolean(active)} onClick={()=>void choose(t)}>{t.id===tool?"Selected":"Select tool"}</button></article>)}</div>

@@ -9,6 +9,10 @@ size already matches the local source.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import hashlib
+import hmac
 import json
 import os
 import posixpath
@@ -17,6 +21,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+
+from ftc_local_config import LocalConfigError, local_config_path, section
 
 
 class RecordingUploadError(RuntimeError):
@@ -33,7 +39,8 @@ class UploadSettings:
     private_key: Path
     remote_root: str = "/srv/ftc-recordings"
     port: int = 22
-    known_hosts: Path = Path.home() / ".ssh" / "known_hosts"
+    known_hosts: Path | None = Path.home() / ".ssh" / "known_hosts"
+    host_key_fingerprint: str | None = None
 
     @classmethod
     def from_environment(cls) -> UploadSettings | None:
@@ -62,6 +69,13 @@ class UploadSettings:
                 known_hosts=_environment_known_hosts(),
             )
 
+        try:
+            secret_settings = section("recording_upload")
+        except LocalConfigError as error:
+            raise RecordingUploadError(str(error)) from error
+        if secret_settings:
+            return _settings_from_config(secret_settings, local_config_path())
+
         config_path = Path(os.getenv(
             "FTC_RECORDING_UPLOAD_CONFIG",
             str(Path(__file__).resolve().parents[1] / "recording_upload.local.json"),
@@ -72,22 +86,9 @@ class UploadSettings:
             config = json.loads(config_path.read_text(encoding="utf-8"))
             if not isinstance(config, dict):
                 raise TypeError("must be a JSON object")
-            host = _required_config_string(config, "host")
-            username = _required_config_string(config, "username")
-            private_key_path = _config_path(config_path, _required_config_string(config, "private_key"))
-            known_hosts_value = config.get("known_hosts")
-            remote_root = str(config.get("remote_root", "/srv/ftc-recordings"))
-            port = int(config.get("port", 22))
-        except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
+            return _settings_from_config(config, config_path)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError, LocalConfigError) as error:
             raise RecordingUploadError(f"Invalid recording upload settings file {config_path}: {error}") from error
-        return cls(
-            host=host,
-            username=username,
-            private_key=private_key_path,
-            remote_root=remote_root,
-            port=port,
-            known_hosts=_config_path(config_path, known_hosts_value) if isinstance(known_hosts_value, str) and known_hosts_value.strip() else _default_known_hosts(),
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +107,27 @@ def _required_config_string(config: dict[object, object], name: str) -> str:
     return value
 
 
+def _settings_from_config(config: dict[object, object], config_path: Path) -> UploadSettings:
+    host = _required_config_string(config, "host")
+    username = _required_config_string(config, "username")
+    private_key_path = _config_path(config_path, _required_config_string(config, "private_key"))
+    known_hosts_value = config.get("known_hosts")
+    host_key_fingerprint = _optional_host_key_fingerprint(config.get("host_key_fingerprint"))
+    remote_root = str(config.get("remote_root", "/srv/ftc-recordings"))
+    port = int(config.get("port", 22))
+    return UploadSettings(
+        host=host,
+        username=username,
+        private_key=private_key_path,
+        remote_root=remote_root,
+        port=port,
+        # A fingerprint deliberately wins when migrating an existing device
+        # that still has a legacy known_hosts setting.
+        known_hosts=None if host_key_fingerprint is not None else (_config_path(config_path, known_hosts_value) if isinstance(known_hosts_value, str) and known_hosts_value.strip() else _default_known_hosts()),
+        host_key_fingerprint=host_key_fingerprint,
+    )
+
+
 def _config_path(config_path: Path, value: str) -> Path:
     path = Path(value).expanduser()
     return path if path.is_absolute() else config_path.parent / path
@@ -118,6 +140,48 @@ def _default_known_hosts() -> Path:
 def _environment_known_hosts() -> Path:
     value = os.getenv("FTC_RECORDING_UPLOAD_KNOWN_HOSTS")
     return Path(value).expanduser() if value else _default_known_hosts()
+
+
+def _optional_host_key_fingerprint(value: object) -> str | None:
+    """Validate an OpenSSH-style SHA-256 host-key fingerprint."""
+
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not value.startswith("SHA256:"):
+        raise ValueError("host_key_fingerprint must start with SHA256:")
+    encoded = value.removeprefix("SHA256:")
+    try:
+        digest = base64.b64decode(encoded + "=", validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise ValueError("host_key_fingerprint must contain base64 SHA-256 data") from error
+    if len(digest) != 32:
+        raise ValueError("host_key_fingerprint must be a SHA-256 fingerprint")
+    return f"SHA256:{encoded}"
+
+
+def _host_key_fingerprint(key: object) -> str:
+    """Calculate the same SHA-256 fingerprint shown by ssh-keygen."""
+
+    as_bytes = getattr(key, "asbytes", None)
+    if not callable(as_bytes):
+        raise RecordingUploadError("SSH server returned an unsupported host key")
+    digest = hashlib.sha256(as_bytes()).digest()
+    return "SHA256:" + base64.b64encode(digest).decode("ascii").rstrip("=")
+
+
+class _PinnedHostKeyPolicy:
+    """Accept only one preconfigured server key; never use trust-on-first-use."""
+
+    def __init__(self, fingerprint: str) -> None:
+        self._fingerprint = fingerprint
+
+    def missing_host_key(self, _client, hostname: str, key: object) -> None:
+        actual = _host_key_fingerprint(key)
+        if hmac.compare_digest(actual, self._fingerprint):
+            return
+        raise RecordingUploadError(
+            f"SSH host key for {hostname} did not match the configured host_key_fingerprint"
+        )
 
 
 class RecordingUploader:
@@ -221,17 +285,22 @@ class RecordingUploader:
         except ImportError as error:
             raise RecordingUploadError("paramiko is required; install web_driver_station/backend/requirements.txt") from error
         key_path = self.settings.private_key.expanduser().resolve()
-        known_hosts = self.settings.known_hosts.expanduser().resolve()
         if not key_path.is_file():
             raise RecordingUploadError(f"SSH private key was not found: {key_path}")
-        if not known_hosts.is_file():
-            raise RecordingUploadError(
-                f"Known-hosts file was not found: {known_hosts}. Connect once with OpenSSH using StrictHostKeyChecking=yes first."
-            )
         client = paramiko.SSHClient()
-        client.load_system_host_keys()
-        client.load_host_keys(str(known_hosts))
-        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+        if self.settings.host_key_fingerprint is not None:
+            # The shared fingerprint is the trust anchor. Do not consult a
+            # device-local host database, which could differ across laptops.
+            client.set_missing_host_key_policy(_PinnedHostKeyPolicy(self.settings.host_key_fingerprint))
+        else:
+            known_hosts = self.settings.known_hosts.expanduser().resolve() if self.settings.known_hosts else None
+            if known_hosts is None or not known_hosts.is_file():
+                raise RecordingUploadError(
+                    "Known-hosts file was not found. Configure recording_upload.host_key_fingerprint instead."
+                )
+            client.load_system_host_keys()
+            client.load_host_keys(str(known_hosts))
+            client.set_missing_host_key_policy(paramiko.RejectPolicy())
         try:
             client.connect(
                 hostname=self.settings.host,

@@ -1,8 +1,9 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { DebuggerLibrary } from "./DebuggerLibrary";
 
-type Signal = { id: string; label: string; unit: string; valueType: string; role?: string };
-type Catalog = { schemaRevision: number; signals: Signal[] };
+type Device = { id: string; label: string; subsystem: string; deviceType: string };
+type Signal = { id: string; label: string; unit: string; valueType: string; role?: string; deviceId?: string; quantity?: string };
+type Catalog = { schemaRevision: number; devices?: Device[]; signals: Signal[] };
 type Snapshot = { sampleSequence: string; schemaRevision: number; robotTimeNs: string; highlighted?: boolean; highlightSource?: string | null; values: Record<string, unknown> };
 type Gamepad = Record<string, boolean | number>;
 type GamepadFrame = { robotTimeNs: string; gamepad1: Gamepad; gamepad2: Gamepad };
@@ -31,6 +32,15 @@ const COLORS = ["#4bb8ff", "#4cdd9b", "#ffbc52"];
 const MAX_TRACES = 3;
 const PEDRO_FIELD_SIZE_INCHES = 144;
 const ROBOT_BOX_SIZE_INCHES = 18;
+const MAX_MOTOR_CURRENT_AMPS = 9;
+const RGB_LIGHT_COLORS = [
+  { label: "Off", dutyCycle: 0.000, color: "#05080d" }, { label: "Red", dutyCycle: 0.277, color: "#ff210b" },
+  { label: "Orange", dutyCycle: 0.333, color: "#ff7900" }, { label: "Yellow", dutyCycle: 0.388, color: "#ffe600" },
+  { label: "Sage", dutyCycle: 0.444, color: "#9fc85b" }, { label: "Green", dutyCycle: 0.500, color: "#12aa3e" },
+  { label: "Azure", dutyCycle: 0.555, color: "#078fd4" }, { label: "Blue", dutyCycle: 0.611, color: "#1465f0" },
+  { label: "Indigo", dutyCycle: 0.666, color: "#4720cf" }, { label: "Violet", dutyCycle: 0.722, color: "#8d2de2" },
+  { label: "White", dutyCycle: 1.000, color: "#ffffff" },
+];
 type Pose2dValue = { x: number; y: number; headingRad: number };
 
 function numeric(value: unknown): number | null {
@@ -73,6 +83,30 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
+function interpolateColor(start: string, end: string, amount: number): string {
+  const startValue = Number.parseInt(start.slice(1), 16); const endValue = Number.parseInt(end.slice(1), 16);
+  const channel = (shift: number) => Math.round(((startValue >> shift) & 255) + (((endValue >> shift) & 255) - ((startValue >> shift) & 255)) * amount);
+  return `rgb(${channel(16)} ${channel(8)} ${channel(0)})`;
+}
+
+function heatStyle(currentAmps: number | null): CSSProperties {
+  const ratio = currentAmps === null ? 0 : Math.max(0, Math.min(1, currentAmps / MAX_MOTOR_CURRENT_AMPS));
+  return { "--current-color": currentAmps === null ? "#36536d" : interpolateColor("#42c77a", "#e64f5b", ratio), "--current-surface": currentAmps === null ? "#0b1d33" : interpolateColor("#113c2a", "#4c1e29", ratio) } as CSSProperties;
+}
+
+function rgbLightColor(value: unknown): { label: string; color: string } | null {
+  const dutyCycle = numeric(value); if (dutyCycle === null) return null;
+  if (dutyCycle < RGB_LIGHT_COLORS[1].dutyCycle) return RGB_LIGHT_COLORS[0];
+  if (dutyCycle > RGB_LIGHT_COLORS[9].dutyCycle) return RGB_LIGHT_COLORS[10];
+  const exact = RGB_LIGHT_COLORS.find(candidate => Math.abs(dutyCycle - candidate.dutyCycle) < .002);
+  if (exact) return exact;
+  for (let index = 1; index < RGB_LIGHT_COLORS.length - 1; index += 1) {
+    const current = RGB_LIGHT_COLORS[index]; const next = RGB_LIGHT_COLORS[index + 1];
+    if (dutyCycle <= next.dutyCycle) return { label: "Color transition", color: interpolateColor(current.color, next.color, (dutyCycle - current.dutyCycle) / (next.dutyCycle - current.dutyCycle)) };
+  }
+  return RGB_LIGHT_COLORS[10];
+}
+
 function recordingDate(modifiedAtNs: string): string {
   return new Date(Number(modifiedAtNs) / 1_000_000).toLocaleString();
 }
@@ -92,6 +126,30 @@ function Trace({ signal, snapshots, startNs, endNs, color }: { signal: Signal; s
 function Controller({ label, gamepad }: { label: string; gamepad: Gamepad | null }) {
   const bool = (key: string) => Boolean(gamepad?.[key]); const axis = (key: string) => Number(gamepad?.[key] ?? 0);
   return <section className="controller panel"><div><strong>{label}</strong><small>{gamepad ? "Recorded input" : "No frame"}</small></div><div className="controller-body"><i className="stick" style={{ "--x": axis("leftStickX"), "--y": axis("leftStickY") } as CSSProperties} /><i className="stick" style={{ "--x": axis("rightStickX"), "--y": axis("rightStickY") } as CSSProperties} /><div className="buttons"><b className={bool("y") ? "on" : ""}>Y</b><b className={bool("x") ? "on" : ""}>X</b><b className={bool("b") ? "on" : ""}>B</b><b className={bool("a") ? "on" : ""}>A</b></div></div><div className="controller-row"><span className={bool("leftBumper") ? "on" : ""}>LB</span><span>LT {axis("leftTrigger").toFixed(2)}</span><span>RT {axis("rightTrigger").toFixed(2)}</span><span className={bool("rightBumper") ? "on" : ""}>RB</span></div></section>;
+}
+
+function MotorMonitor({ device, signals, snapshot }: { device: Device; signals: Signal[]; snapshot: Snapshot | null }) {
+  const forMotor = signals.filter(signal => signal.deviceId === device.id);
+  const signalFor = (...quantities: string[]) => forMotor.find(signal => quantities.includes(signal.quantity ?? ""));
+  const commandedPower = signalFor("commandedPower", "appliedPower"); const velocity = signalFor("velocity", "velocityTicksPerSecond");
+  const current = signalFor("current", "currentAmps"); const electricalPower = signalFor("electricalPower", "electricalPowerWatts");
+  const value = (signal?: Signal) => signal && snapshot ? snapshot.values[signal.id] : null;
+  const currentAmps = numeric(value(current));
+  const active = snapshot && (commandedPower || velocity || current || electricalPower);
+  return <article className="motor-monitor-card">
+    <div className="motor-monitor-heading"><strong>{device.label}</strong><span className={active ? "motor-live" : ""}>{active ? "AT CURSOR" : "WAITING"}</span></div>
+    <dl className="motor-metrics">
+      <div><dt>pow</dt><dd>{formatValue(value(commandedPower), commandedPower?.unit ?? "normalized")}</dd></div>
+      <div><dt>vel</dt><dd>{formatValue(value(velocity), velocity?.unit ?? "t/s")}</dd></div>
+      <div className="motor-electrical-readout" style={heatStyle(currentAmps)}><div><dt>current</dt><dd>{formatValue(currentAmps, current?.unit ?? "A")}</dd></div><div><dt>power</dt><dd>{formatValue(value(electricalPower), electricalPower?.unit ?? "W")}</dd></div></div>
+    </dl>
+  </article>;
+}
+
+function RgbLightPanel({ lights, snapshot }: { lights: Array<{ device: Device; signal: Signal }>; snapshot: Snapshot | null }) {
+  return <section className="rgb-light-panel panel"><div className="rgb-light-panel-heading"><div><p className="eyebrow">Recorded indicator output</p><h2>RGB lights</h2></div><span>{lights.length ? `${lights.length} LIGHT${lights.length === 1 ? "" : "S"}` : "WAITING"}</span></div>
+    {lights.length ? <div className="rgb-light-grid">{lights.map(({ device, signal }) => { const output = snapshot ? rgbLightColor(snapshot.values[signal.id]) : null; return <article className="rgb-light-card" key={device.id}><span className="rgb-light-swatch" aria-hidden="true" style={{ "--light-color": output?.color ?? "#162637" } as CSSProperties} /><div><strong>{device.label}</strong><small>{output?.label ?? "Waiting for light signal"}</small></div></article>; })}</div> : <p className="instrument-empty">No RGB indicator recorded.</p>}
+  </section>;
 }
 
 function FieldMap({ signal, snapshot }: { signal: Signal | undefined; snapshot: Snapshot | null }) {
@@ -175,6 +233,13 @@ function RecordingApp() {
     if (!recording || !snapshot) return null;
     return recording.gamepadFrames.reduce<GamepadFrame | null>((closest, frame) => !closest || Math.abs(Number(frame.robotTimeNs) - timeNs(snapshot)) < Math.abs(Number(closest.robotTimeNs) - timeNs(snapshot)) ? frame : closest, null);
   }, [recording, snapshot]);
+  const catalogDevices = recording?.catalog?.devices ?? [];
+  const motorDevices = useMemo(() => catalogDevices.filter(device => device.deviceType.toLowerCase().includes("motor")), [catalogDevices]);
+  const rgbLights = useMemo(() => catalogDevices.flatMap(device => {
+    const isRgbLight = /rgb|indicator|light/i.test(`${device.id} ${device.label} ${device.deviceType}`);
+    const signal = recording?.catalog?.signals.find(candidate => candidate.deviceId === device.id && /duty.?cycle|color|light|indicator|position/i.test(`${candidate.id} ${candidate.quantity ?? ""} ${candidate.label}`));
+    return isRgbLight && signal ? [{ device, signal }] : [];
+  }), [catalogDevices, recording?.catalog?.signals]);
   const traces = signals.filter(signal => selected.includes(signal.id));
   const commandResponses = recording?.debugMessages.filter(message => message.type === "debug_command_response") ?? [];
   const toggle = (id: string) => setSelected(previous => previous.includes(id) ? previous.filter(value => value !== id) : [...previous, id].slice(-MAX_TRACES));
@@ -185,11 +250,14 @@ function RecordingApp() {
   return <main>
     <header className="topbar panel"><div><button className="back-button" onClick={() => selectRecording(null)}>← Recordings</button><p className="eyebrow">Offline replay</p><h1>{recording.session?.robotName ?? "FTC Recording"}</h1><p>{recording.session?.opModeName ?? "Unknown OpMode"}</p></div><dl><div><dt>Snapshots</dt><dd>{recording.snapshotCount.toLocaleString()}</dd></div><div><dt>Duration</dt><dd>{formatTime(duration)}</dd></div><div><dt>Log files</dt><dd>{recording.logFiles.length}</dd></div><div><dt>Gaps</dt><dd>{recording.gapCount}</dd></div></dl></header>
     <section className="timeline panel"><div><div><p className="eyebrow">Snapshot master clock · whole recording</p><strong>{snapshot ? `Sample #${snapshot.sampleSequence}${snapshot.highlighted ? ` · Highlighted by ${snapshot.highlightSource === "telemetry_lab" ? "Telemetry Lab" : "Control Hub"}` : ""}` : "No snapshots"}</strong><span>{formatTime(elapsed)} / {formatTime(duration)}</span></div><button onClick={() => setPlaying(value => !value)} disabled={!snapshot}>{playing ? "Pause" : "Play"}</button></div><input type="range" min="0" max={Math.max(0, duration)} step="0.001" value={playbackSeconds} onChange={event => { setPlaying(false); setPlaybackSeconds(Number(event.target.value)); }} /><div className="timeline-scale"><span>Start</span><span>End</span></div></section>
+    <section className="replay-console">
+      <aside className="trace-column panel"><div className="trace-column-heading"><p className="eyebrow">Telemetry Lab</p><strong>Traces · {traces.length} / {MAX_TRACES}</strong></div><div className="signal-picker">{signals.map(signal => <label key={signal.id}><input type="checkbox" checked={selected.includes(signal.id)} onChange={() => toggle(signal.id)} />{signal.label}</label>)}</div><section className="traces">{traces.length ? traces.map((signal, traceIndex) => <Trace key={signal.id} signal={signal} snapshots={recording.snapshots} startNs={startNs} endNs={endNs} color={COLORS[traceIndex]} />) : <p className="empty">Choose up to three numeric traces.</p>}</section></aside>
+      <section className="replay-video panel"><div className="video-heading"><div><p className="eyebrow">Synchronized camera</p><strong>{selectedVideo ? selectedVideo.name : "No video in this recording"}</strong></div>{recording.videoClips.length > 1 && <label>Clip<select value={selectedVideoIndex} onChange={event => { setPlaying(false); setSelectedVideoIndex(Number(event.target.value)); setVideoDurationSeconds(null); }}>{recording.videoClips.map(clip => <option value={clip.index} key={clip.index}>{clip.name}</option>)}</select></label>}</div>{selectedVideo ? <div className="video-stage">{videoHasEnded ? <div className="black-frame">Video ended · snapshots continue to {formatTime(duration)}</div> : <video ref={videoRef} src={selectedVideo.url} muted playsInline preload="metadata" onLoadedMetadata={event => setVideoDurationSeconds(event.currentTarget.duration)} onEnded={() => setVideoDurationSeconds(videoRef.current?.duration ?? playbackSeconds)} />}</div> : <div className="black-frame">Add an MP4 anywhere inside this recording’s session folder to enable playback.</div>}</section>
+      <aside className="instrument-column"><section className="motor-monitor-section panel"><div className="motor-monitor-section-heading"><div><p className="eyebrow">Telemetry Lab</p><h2>Motor visualization</h2></div><span>{motorDevices.length ? `${motorDevices.length} MOTORS` : "WAITING"}</span></div>{motorDevices.length ? <div className="motor-monitor-grid">{motorDevices.map(device => <MotorMonitor key={device.id} device={device} signals={recording.catalog?.signals ?? []} snapshot={snapshot} />)}</div> : <p className="instrument-empty">No motor catalog was recorded.</p>}</section><Controller label="Driver 1" gamepad={gamepadFrame?.gamepad1 ?? null} /><Controller label="Driver 2" gamepad={gamepadFrame?.gamepad2 ?? null} /><RgbLightPanel lights={rgbLights} snapshot={snapshot} /></aside>
+    </section>
     <FieldMap signal={localizationSignal} snapshot={snapshot} />
     {recording.incidents.length > 0 && <section className="replay-activity panel"><p className="eyebrow">Incident capture</p><div>{recording.incidents.map(incident => <button key={incident.id} onClick={() => { setPlaying(false); setPlaybackSeconds(Math.max(0, (Number(incident.startRobotTimeNs) - startNs) / 1_000_000_000)); }}><strong>{incident.sources.map(source => source === "telemetry_lab" ? "Telemetry Lab" : "Control Hub").join(" + ")}</strong><small>Samples #{incident.firstSampleSequence}–#{incident.lastSampleSequence}</small></button>)}</div></section>}
     {commandResponses.length > 0 && <section className="replay-activity panel"><p className="eyebrow">Telemetry Lab command confirmations</p><div>{commandResponses.map((message, index) => <article key={`${message.robotTimeNs}-${index}`}><strong>{message.commandId ?? "Command"} · {message.result ?? "response"}</strong><small>{message.message ?? "Control Hub response recorded"}</small></article>)}</div></section>}
-    <section className="video-playback panel"><div className="video-heading"><div><p className="eyebrow">Video playback</p><strong>{selectedVideo ? selectedVideo.name : "No video in this recording"}</strong><small>Video plays at its native frame rate; snapshots follow the master clock independently.</small></div>{recording.videoClips.length > 1 && <label>Clip<select value={selectedVideoIndex} onChange={event => { setPlaying(false); setSelectedVideoIndex(Number(event.target.value)); setVideoDurationSeconds(null); }}>{recording.videoClips.map(clip => <option value={clip.index} key={clip.index}>{clip.name}</option>)}</select></label>}</div>{selectedVideo ? <div className="video-stage">{videoHasEnded ? <div className="black-frame">Video ended · snapshots continue to {formatTime(duration)}</div> : <video ref={videoRef} src={selectedVideo.url} muted playsInline preload="metadata" onLoadedMetadata={event => setVideoDurationSeconds(event.currentTarget.duration)} onEnded={() => setVideoDurationSeconds(videoRef.current?.duration ?? playbackSeconds)} />}</div> : <div className="black-frame">Add an MP4 anywhere inside this recording’s session folder to enable playback.</div>}</section>
-    <section className="workspace"><aside className="signal-picker panel"><div><p className="eyebrow">Traces</p><strong>{traces.length} / {MAX_TRACES}</strong></div>{signals.map(signal => <label key={signal.id}><input type="checkbox" checked={selected.includes(signal.id)} onChange={() => toggle(signal.id)} />{signal.label}</label>)}</aside><section className="traces">{traces.length ? traces.map((signal, traceIndex) => <Trace key={signal.id} signal={signal} snapshots={recording.snapshots} startNs={startNs} endNs={endNs} color={COLORS[traceIndex]} />) : <p className="empty">Choose up to three numeric traces.</p>}</section><aside className="side"><Controller label="Driver 1" gamepad={gamepadFrame?.gamepad1 ?? null} /><Controller label="Driver 2" gamepad={gamepadFrame?.gamepad2 ?? null} /><section className="values panel"><p className="eyebrow">Current values</p>{snapshot ? Object.entries(snapshot.values).map(([id, value]) => <div key={id}><span>{recording.catalog?.signals.find(signal => signal.id === id)?.label ?? id}</span><output>{formatValue(value, recording.catalog?.signals.find(signal => signal.id === id)?.unit)}</output></div>) : <p>None</p>}</section></aside></section>
     {recording.invalidFrames > 0 && <p className="warning">Skipped {recording.invalidFrames} unsupported/corrupt frames while reading this recording.</p>}
   </main>;
 }

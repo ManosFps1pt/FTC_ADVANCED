@@ -1,0 +1,20 @@
+{
+  "openai": {
+    "api_key": "paste-your-OpenAI-API-key-here-if-a-future-feature-needs-it",
+    "control_plane_api_key": "paste-the-OpenAI-secure-MCP-tunnel-key-here"
+  },
+  "discord": {
+    "bot_token": "paste-your-Discord-bot-token-here",
+    "api_base": "http://127.0.0.1:8000",
+    "guild_ids": [123456789012345678],
+    "viewer_role_ids": []
+  },
+  "recording_upload": {
+    "host": "your-oracle-public-ip-or-hostname",
+    "username": "ubuntu",
+    "private_key": "ssh-key-2026-08-20 (1).key",
+    "host_key_fingerprint": "SHA256:replace-with-your-oracle-ssh-host-key-fingerprint",
+    "remote_root": "/srv/ftc-recordings",
+    "port": 22
+  }
+}
