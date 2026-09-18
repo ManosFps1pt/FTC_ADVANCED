@@ -50,20 +50,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-where pnpm >nul 2>nul
-if errorlevel 1 (
-    where corepack >nul 2>nul
-    if errorlevel 1 (
-        echo Node.js did not provide Corepack, which is needed to run pnpm.
-        exit /b 1
-    )
-    set "PNPM_COMMAND=corepack pnpm"
-    call %PNPM_COMMAND% --version >nul 2>nul
-    if errorlevel 1 (
-        echo Corepack could not prepare pnpm. Check your Internet connection and try again.
-        exit /b 1
-    )
-)
+call :ensure_pnpm
+if errorlevel 1 exit /b 1
 
 where scrcpy >nul 2>nul
 if errorlevel 1 (
@@ -121,3 +109,44 @@ if errorlevel 1 (
 echo Installing %~2...
 winget install --id %~1 --exact --silent --accept-package-agreements --accept-source-agreements
 exit /b %ERRORLEVEL%
+
+:ensure_pnpm
+where pnpm >nul 2>nul
+if not errorlevel 1 (
+    call pnpm --version >nul 2>nul
+    if not errorlevel 1 (
+        set "PNPM_COMMAND=pnpm"
+        exit /b 0
+    )
+)
+
+rem Node.js 25+ does not bundle Corepack. Use it when present, but do not rely on it.
+where corepack >nul 2>nul
+if not errorlevel 1 (
+    set "PNPM_COMMAND=corepack pnpm"
+    call %PNPM_COMMAND% --version >nul 2>nul
+    if not errorlevel 1 exit /b 0
+)
+
+where npm >nul 2>nul
+if errorlevel 1 (
+    echo Node.js is installed but npm is unavailable, so pnpm cannot be installed.
+    echo Reinstall Node.js LTS, then run this launcher again.
+    exit /b 1
+)
+
+echo Installing pnpm for this Windows user...
+call npm install --global pnpm@10 --prefix "%APPDATA%\npm"
+if errorlevel 1 (
+    echo pnpm could not be installed. Check your Internet connection and try again.
+    exit /b 1
+)
+set "PATH=%APPDATA%\npm;%PATH%"
+set "PNPM_COMMAND=pnpm"
+call pnpm --version >nul 2>nul
+if errorlevel 1 (
+    echo pnpm was installed but is not available to this session yet.
+    echo Close this window and run the launcher again.
+    exit /b 1
+)
+exit /b 0
