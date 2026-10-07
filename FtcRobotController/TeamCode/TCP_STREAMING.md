@@ -83,18 +83,22 @@ data) and `TelemetryGamepadTest` (gamepad-only data).
 
 ## PedroPathing localization pose
 
+This integration targets Pedro Pathing 3 (`revhub:3.0.1`). Its `Pose` type is
+`com.pedropathing.math.Pose`; use `follower.pose()` and the pose accessors
+`x()`, `y()`, and `heading()` in place of the Pedro 2 getters.
+
 `addPose()` sends one typed `pose2d` signal named `<deviceId>.pose` on every
 `publishLoop()`. It uses PedroPathing coordinates directly: the field is 144
 by 144 inches, `(0, 0)` is bottom-left, +X points right, +Y points up, and
 heading is radians counter-clockwise from +X. Do not convert a pose that
-already came from Pedro or `Follower.getPose()`.
+already came from Pedro or `Follower.pose()`.
 
 ```java
-// Most PedroPathing OpModes: follower.getPose() is captured every loop.
+// Most PedroPathing OpModes: follower.pose() is captured every loop.
 dataClient.addPose("localization", "Pinpoint / Pedro Pose", follower);
 
 // Equivalent when your code owns a supplier.
-dataClient.addPose("localization", "Pedro Pose", () -> follower.getPose());
+dataClient.addPose("localization", "Pedro Pose", () -> follower.pose());
 
 // A live x, y, heading sequence; heading must be radians.
 dataClient.addPose("localization", "Pinpoint Pose",

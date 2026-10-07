@@ -4,7 +4,7 @@ import android.os.Build;
 import android.os.SystemClock;
 
 import com.pedropathing.follower.Follower;
-import com.pedropathing.geometry.Pose;
+import com.pedropathing.math.Pose;
 import com.google.protobuf.ByteString;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.Gamepad;
@@ -170,10 +170,10 @@ public final class StructuredRobotDataClient implements Closeable {
         return addPoseValue(deviceId, label, () -> fromPedroPose(poseSupplier.get()));
     }
 
-    /** Publishes {@link Follower#getPose()} on every loop. */
+    /** Publishes {@link Follower#pose()} on every loop. */
     public synchronized StructuredRobotDataClient addPose(String deviceId, String label, Follower follower) {
         if (follower == null) throw new IllegalArgumentException("follower must not be null");
-        return addPose(deviceId, label, follower::getPose);
+        return addPose(deviceId, label, follower::pose);
     }
 
     /** Publishes a pose from live coordinate suppliers on every loop. Heading is in radians. */
@@ -609,7 +609,7 @@ public final class StructuredRobotDataClient implements Closeable {
     }
     private static PoseValue fromPedroPose(Pose pose) {
         if (pose == null) return null;
-        return new PoseValue(pose.getX(), pose.getY(), pose.getHeading());
+        return new PoseValue(pose.x(), pose.y(), pose.heading());
     }
     private static final class Device { final String id, label, subsystem, deviceType; Device(String id, String label, String subsystem, String deviceType) { this.id = text(id); this.label = text(label); this.subsystem = text(subsystem); this.deviceType = text(deviceType); } }
     private static final class Signal { final String id, label, deviceId, quantity, unit; final ValueType valueType; final ChannelRole role; final double sampleHintHz; int channelId; Signal(String id, String label, String deviceId, String quantity, String unit, String type, String role, double sampleHintHz) { this.id = text(id); this.label = text(label); this.deviceId = deviceId; this.quantity = text(quantity); this.unit = text(unit); this.valueType = ValueType.valueOf(text(type).toUpperCase()); this.role = ChannelRole.valueOf(text(role).toUpperCase()); this.sampleHintHz = sampleHintHz; } }
