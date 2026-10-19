@@ -1,6 +1,8 @@
+import { FeedforwardReport, type FeedforwardAnalysis } from "./FeedforwardReport";
+import type { InputDefinition } from "./BenchmarkForm";
 import "./debugger.css";
 
-export type Benchmark = { id: string; label: string; description: string; version: number; reverseAllowed?: boolean; maxVoltage?: number };
+export type Benchmark = { id: string; label: string; description: string; version: number; reverseAllowed?: boolean; maxVoltage?: number; inputs?: InputDefinition[] };
 export type RunManifest = { runId: string; mechanismId?: string; mechanismLabel?: string; motorName?: string;
   createdAt: string; state: string; phase?: string; repetition?: number; direction?: number; message?: string;
   outcome?: string; sampleCount?: number; benchmark?: Benchmark; inputs?: {id: string; int64Value?: string; float64Value?: number; booleanValue?: boolean}[];
@@ -13,13 +15,13 @@ export type Analysis = {analyzerId: string; speedUnit: string; kvUnit: string; n
   summary: Record<string, Range>; repetitions: Repetition[]; operatingPoints: OperatingPoint[];
   fits: {direction: number; fit: Fit|null}[]; coasts: {direction: number; repetition: number; points: number[][]}[];
   timeline: {time: number; speed: number; voltage: number; current: number; phase: string}[]};
-export type Result = {manifest: RunManifest; analysis: Analysis|null};
+export type Result = {manifest: RunManifest; analysis: Analysis|FeedforwardAnalysis|null};
 export const directionName = (value: number) => value === 1 ? "Forward" : "Reverse";
 const fmt = (value: number|null|undefined, digits=3) => value == null ? "Unavailable" : value.toLocaleString(undefined,{maximumFractionDigits:digits});
 const colors = ["#5cbaff", "#56d5a0", "#e5b864", "#bf9fff", "#f78792", "#6bdbdf"];
 type Series = {label: string; points: number[][]; scatter?: boolean};
 
-function Plot({title,xLabel,yLabel,series}: {title:string;xLabel:string;yLabel:string;series:Series[]}) {
+export function Plot({title,xLabel,yLabel,series}: {title:string;xLabel:string;yLabel:string;series:Series[]}) {
   const all=series.flatMap(s=>s.points).filter(p=>Number.isFinite(p[0])&&Number.isFinite(p[1]));
   if (!all.length) return <section className="dbg-chart"><h3>{title}</h3><p>No valid measurements for this plot.</p></section>;
   const xmin=Math.min(0,...all.map(p=>p[0])), xmax=Math.max(...all.map(p=>p[0]),xmin+0.001);
@@ -35,6 +37,11 @@ function Plot({title,xLabel,yLabel,series}: {title:string;xLabel:string;yLabel:s
 export function DebuggerReport({result,apiRoot="/api/debug/results"}: {result:Result;apiRoot?:string}) {
   const {manifest:m,analysis:a}=result;
   if (!a) return <div className="dbg-notice">Analysis is unavailable for this result.</div>;
+  if ("points" in a) return <article className="dbg-report">
+    <header className="dbg-report-heading"><div><h2>{m.mechanismLabel} · {m.benchmark?.label}</h2>
+      <p>{m.outcome} · {m.message} · {m.sampleCount} samples</p></div><div className="dbg-actions">
+      <a href={`${apiRoot}/${m.runId}/raw`}>Download raw data</a><a href={`${apiRoot}/${m.runId}/report`}>Download report</a></div></header>
+    <FeedforwardReport key={m.runId} analysis={a}/><small>Run {m.runId} · Analyzer {a.analyzerId}</small></article>;
   const voltageSeries:Series[]=[], currentSeries:Series[]=[];
   for (const d of [1,-1]) {
     const points=a.operatingPoints.filter(p=>p.direction===d);

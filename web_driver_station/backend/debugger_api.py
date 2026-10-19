@@ -4,6 +4,9 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+
+from google.protobuf.json_format import MessageToDict
+from .debugger_inputs import encode_inputs
 import uuid
 import zipfile
 from pathlib import Path
@@ -56,6 +59,7 @@ class RunRequest(BaseModel):
     repetitions: int = Field(default=3, ge=1, le=5, strict=True)
     max_voltage: float = Field(default=12, ge=.1, le=12, allow_inf_nan=False)
     reverse: bool = False
+    inputs: dict[str, object] | None = None
 
 
 class StorageRequest(BaseModel):
@@ -79,7 +83,26 @@ def install_debugger_controls(app: FastAPI, service) -> None:
         definition = next((b for b in ready.get("benchmarks", []) if b["id"] == request.benchmark_id), None)
         if not definition or ready.get("nodeId") != request.node_id or ready.get("toolInstanceId") != request.tool_instance_id:
             raise HTTPException(409, "Select an available benchmark first")
-        if request.reverse and not definition.get("reverseAllowed", False): raise HTTPException(400, "Reverse is not registered")
+        supplied = request.inputs
+        if supplied is None:
+            if request.benchmark_id != "motor.friction.v1":
+                raise HTTPException(400, "This benchmark requires an input map")
+            supplied = {"repetitions": request.repetitions, "max_voltage": request.max_voltage, "reverse": request.reverse}
+        try:
+            # Legacy peers/tests may omit friction input descriptors.
+            if not definition.get("inputs") and request.benchmark_id == "motor.friction.v1":
+                legacy = {"inputs": [
+                    {"id": "repetitions", "valueType": "INT64", "minFloat64": 1, "maxFloat64": 5, "defaultValue": {"int64Value": "3"}},
+                    {"id": "max_voltage", "valueType": "FLOAT64", "minFloat64": .1, "maxFloat64": 12, "defaultValue": {"float64Value": 12}},
+                    {"id": "reverse", "valueType": "BOOLEAN", "defaultValue": {"booleanValue": False}},
+                ]}
+                arguments = encode_inputs(legacy, supplied)
+            else:
+                arguments = encode_inputs(definition, supplied)
+        except (ValueError, TypeError) as error:
+            raise HTTPException(400, str(error)) from error
+        if supplied.get("reverse", False) and not definition.get("reverseAllowed", False):
+            raise HTTPException(400, "Reverse is not registered")
         run_id = str(request.request_id)
         if run_id not in results.pending and ((results.path(run_id)/"manifest.json").is_file()
                 or (results.root/".debugger-receipts"/f"{run_id}.json").is_file()):
@@ -93,16 +116,11 @@ def install_debugger_controls(app: FastAPI, service) -> None:
         metadata = {"nodeId": request.node_id, "toolInstanceId": request.tool_instance_id,
                     "benchmark": definition, "mechanismId": mechanism.get("id", request.node_id),
                     "mechanismLabel": mechanism.get("label", request.node_id),
-                    "inputs": [{"id": "repetitions", "int64Value": str(request.repetitions)},
-                               {"id": "max_voltage", "float64Value": request.max_voltage},
-                               {"id": "reverse", "booleanValue": request.reverse}]}
+                    "inputs": [MessageToDict(arg) for arg in arguments]}
         if run_id not in results.pending:
             results.expect(run_id, metadata)
         try:
-            await send_command(run_id, "benchmark.run", metadata, [
-                wire.DebugCommandArgumentValue(id="repetitions", int64_value=request.repetitions),
-                wire.DebugCommandArgumentValue(id="max_voltage", float64_value=request.max_voltage),
-                wire.DebugCommandArgumentValue(id="reverse", boolean_value=request.reverse)])
+            await send_command(run_id, "benchmark.run", metadata, arguments)
         except (RuntimeError, OSError) as error:
             results.pending[run_id].update(state="incomplete", message=str(error))
             raise HTTPException(409, str(error)) from error

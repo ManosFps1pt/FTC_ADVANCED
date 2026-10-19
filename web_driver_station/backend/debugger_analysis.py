@@ -110,4 +110,6 @@ def friction(samples: list[dict], settings: dict) -> dict[str, Any]:
                       "Current is the motor-controller reading, not calibrated friction torque. No health verdict is assigned."]}
 
 
-ANALYZERS = {"motor.friction.v1": friction}
+from .feedforward_analysis import feedforward
+
+ANALYZERS = {"motor.friction.v1": friction, "motor.feedforward.v1": feedforward}

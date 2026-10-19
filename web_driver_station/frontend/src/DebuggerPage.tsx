@@ -1,3 +1,4 @@
+import { BenchmarkForm, type InputValue } from "./debugger/BenchmarkForm";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { DebuggerReport, type Benchmark, type Result, type RunManifest } from "./debugger/Report";
 
@@ -41,7 +42,6 @@ export function DebuggerPage({ opModeControl }: { opModeControl: ReactNode }) {
   const [manual,setManual]=useState(false),[status,setStatus]=useState<Status>({connected:false});
   const [mechanism,setMechanism]=useState(""),[tool,setTool]=useState(""),[runs,setRuns]=useState<RunManifest[]>([]);
   const [runId,setRunId]=useState(""),[result,setResult]=useState<Result|null>(null),[notice,setNotice]=useState("");
-  const [repetitions,setRepetitions]=useState(3),[voltage,setVoltage]=useState(12),[reverse,setReverse]=useState(false);
   const [busy,setBusy]=useState(false),[dismissed,setDismissed]=useState<string[]>([]);
   const selectedRun=runs.find(r=>r.runId===runId),runState=selectedRun?.state;
   const active=runs.find(r=>["awaiting_acceptance","running","receiving","transferring"].includes(r.state));
@@ -74,15 +74,15 @@ export function DebuggerPage({ opModeControl }: { opModeControl: ReactNode }) {
   const ready=status.tool_ready?.nodeId===tool?status.tool_ready:undefined;
   const benchmark=ready?.benchmarks?.[0];
   const choose=async(node:Node)=>{
-    setBusy(true);setNotice("");setTool(node.id);setManual(node.id.endsWith(".power"));setReverse(false);
+    setBusy(true);setNotice("");setTool(node.id);setManual(node.id.endsWith(".power"));
     try{await api("/select",{node_id:node.id,manifest_revision:status.manifest?.revision},"POST");await refresh();}
     catch(e){setManual(false);setNotice(String(e));}finally{setBusy(false);}
   };
-  const run=async()=>{
+  const run=async(inputs:Record<string,InputValue>)=>{
     if(!ready||!benchmark)return;
     setBusy(true);setNotice("");setResult(null);
     try{const next=await api<{runId:string}>("/runs",{node_id:ready.nodeId,tool_instance_id:ready.toolInstanceId,
-      benchmark_id:benchmark.id,request_id:crypto.randomUUID(),repetitions,max_voltage:voltage,reverse},"POST");setRunId(next.runId);await refresh();}
+      benchmark_id:benchmark.id,request_id:crypto.randomUUID(),inputs},"POST");setRunId(next.runId);await refresh();}
     catch(e){setNotice(String(e));}finally{setBusy(false);}
   };
   const storage=async(action:"discard"|"upload"|"keep")=>{
@@ -101,7 +101,8 @@ export function DebuggerPage({ opModeControl }: { opModeControl: ReactNode }) {
     {notice&&<div className="dbg-notice" role="status">{notice}</div>}
     <div className="dbg-layout"><aside className="dbg-nav"><p className="dbg-eyebrow">Registered mechanisms · {status.connected?"Connected":"Offline"}</p>{mechanisms.map(m=><button className={selectedMechanism===m.id?"selected":""} key={m.id} disabled={Boolean(active)} onClick={()=>{setMechanism(m.id);setTool("");setManual(false);}}>{m.label}</button>)}{!mechanisms.length&&<p>Launch the Debugger to receive the mechanism list.</p>}</aside>
     <section className="dbg-workbench"><h2>{nodes.find(n=>n.id===selectedMechanism)?.label??"Select a mechanism"}</h2><div className="dbg-tools">{tools.map(t=><article className="dbg-tool" key={t.id}><h3>{t.label}</h3><p>{t.description}</p>{!t.enabled&&<p>{t.disabledReason}</p>}<button disabled={!t.enabled||busy||Boolean(active)} onClick={()=>void choose(t)}>{t.id===tool?"Selected":"Select tool"}</button></article>)}</div>
-      {manual&&<ManualMotorControls toolId={tool} ready={ready} onNotice={setNotice}/>} {benchmark&&!manual&&<section><h3>{benchmark.label}</h3><p>{benchmark.description}</p><div className="dbg-inputs"><label>Repetitions<input type="number" min={1} max={5} step={1} value={repetitions} disabled={Boolean(active)} onChange={e=>setRepetitions(Number(e.target.value))}/></label><label>Maximum estimated voltage (V)<input type="number" min={.1} max={12} step={.1} value={voltage} disabled={Boolean(active)} onChange={e=>setVoltage(Number(e.target.value))}/></label>{benchmark.reverseAllowed&&<label>Also test reverse<input type="checkbox" checked={reverse} disabled={Boolean(active)} onChange={e=>setReverse(e.target.checked)}/></label>}</div><button className="primary" disabled={busy||Boolean(active)||!status.connected||!Number.isInteger(repetitions)||repetitions<1||repetitions>5||voltage<.1||voltage>12} onClick={()=>void run()}>Run benchmark</button></section>}
+      {manual&&<ManualMotorControls toolId={tool} ready={ready} onNotice={setNotice}/>} {benchmark&&!manual&&<BenchmarkForm key={ready?.toolInstanceId} benchmark={benchmark}
+        disabled={busy||Boolean(active)||!status.connected} onRun={inputs=>void run(inputs)}/>}
       {selectedRun&&selectedRun.state!=="ready"&&<div className="dbg-progress" role="status"><span>{selectedRun.state.replaceAll("_"," ")}</span><strong>{selectedRun.phase??"Waiting for Control Hub"}</strong><p>{selectedRun.repetition?`Repetition ${selectedRun.repetition} · ${selectedRun.direction===-1?"Reverse":"Forward"}`:""}</p><p>{selectedRun.message}</p>{["awaiting_acceptance","running"].includes(selectedRun.state)&&<button className="danger" onClick={()=>void api(`/runs/${runId}/abort`,{},"POST").catch(e=>setNotice(String(e)))}>Abort benchmark</button>}</div>}
     </section></div>
     {result&&<><DebuggerReport result={result}/>{selectedRun?.storage?.state==="uploading"&&<p role="status">Uploading result… The local copy is retained until upload succeeds.</p>}{selectedRun?.storage?.state==="error"&&<div className="dbg-notice">{selectedRun.storage.detail}<button onClick={()=>setDismissed(d=>d.filter(id=>id!==runId))}>Retry storage decision</button></div>}{selectedRun?.storage?.state==="complete"&&<p>Uploaded successfully. Laptop copy retained.</p>}</>}

@@ -376,6 +376,8 @@ message DebugCommandArgumentDefinition {
   double min_float64 = 7;
   double max_float64 = 8;
   repeated DebugEnumOption enum_options = 9;
+  // Optional typed default; absent means the operator must supply required inputs.
+  DebugCommandArgumentValue default_value = 10;
 }
 
 message DebugEnumOption {

@@ -109,7 +109,9 @@ class DebuggerResults:
             channels = {c.channel_id: c.key for c in value.benchmark.channels}
             required = {"battery_voltage", "duty", "current", "position", "velocity", "estimated_voltage", "movement_onset", "steady_window"}
             if len(channels) != 8 or set(channels.values()) != required:
-                raise ValueError("Unexpected friction dataset channels")
+                raise ValueError("Unexpected motor dataset channels")
+            if value.benchmark.id == "motor.feedforward.v1" and value.ticks_per_revolution <= 0:
+                raise ValueError("Feedforward requires encoder calibration")
             if not math.isfinite(value.ticks_per_revolution) or value.ticks_per_revolution < 0:
                 raise ValueError("Invalid encoder calibration")
             previous = self.receiving.get(run_id)
@@ -183,8 +185,9 @@ class DebuggerResults:
     def decode_samples(header: wire.DebugRunHeader, rows: list) -> list[dict]:
         channels = {c.channel_id: c.key for c in header.benchmark.channels}
         samples, last_time = [], -1
+        phases = ("rest", "ramp", "settle", "sample", "coast") if header.benchmark.id == "motor.feedforward.v1" else ("rest", "ramp", "steady", "coast")
         for index, row in enumerate(rows):
-            if row.phase not in ("rest", "ramp", "steady", "coast") or row.direction not in (-1, 1) or not 1 <= row.repetition <= 5:
+            if row.phase not in phases or row.direction not in (-1, 1) or not 1 <= row.repetition <= 5:
                 raise ValueError("Invalid acquisition phase or repetition")
             if row.sequence != index or row.robot_time_ns <= last_time or row.robot_time_ns < header.started_robot_ns:
                 raise ValueError("Invalid acquisition timestamp or sample sequence")
@@ -203,5 +206,10 @@ class DebuggerResults:
                 if isinstance(data, float) and not math.isfinite(data): raise ValueError("Non-finite measurement")
                 sample[channels[val.channel_id]] = data
             if seen != set(channels): raise ValueError("Incomplete sample")
+            if header.benchmark.id == "motor.feedforward.v1":
+                if sample["battery_voltage"] <= 0 or sample["current"] < 0 or abs(sample["duty"]) > header.max_power+1e-9:
+                    raise ValueError("Invalid motor measurement")
+                if not math.isclose(sample["estimated_voltage"], sample["battery_voltage"]*sample["duty"], rel_tol=1e-9, abs_tol=1e-9):
+                    raise ValueError("Estimated voltage does not match applied output")
             samples.append(sample)
         return samples
