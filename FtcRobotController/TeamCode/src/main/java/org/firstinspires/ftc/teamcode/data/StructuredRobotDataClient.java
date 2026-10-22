@@ -85,6 +85,7 @@ public final class StructuredRobotDataClient implements Closeable {
     private volatile Socket socket;
     private volatile Thread worker;
     private volatile String lastError;
+    private volatile DataTransportMode transportMode = DataTransportMode.OFF;
     private VoltageSensor voltageSensor;
     private DoubleSupplier runtimeSecondsSource;
     private Gamepad boundGamepad1, boundGamepad2;
@@ -230,7 +231,12 @@ public final class StructuredRobotDataClient implements Closeable {
         installStandardSignals();
         validateCatalog();
         if (!running.compareAndSet(false, true)) return;
-        worker = new Thread(this::run, "StructuredRobotDataClient"); worker.setDaemon(true); worker.start();
+        transportMode = DataTransportMode.current();
+        if (transportMode == DataTransportMode.OFF) return;
+        worker = new Thread(transportMode == DataTransportMode.LOCAL_MATCH ? this::runLocal : this::run,
+                transportMode == DataTransportMode.LOCAL_MATCH ? "StructuredRobotDataClient-local" : "StructuredRobotDataClient");
+        worker.setDaemon(true);
+        worker.start();
     }
 
     /** Copies a complete snapshot and returns immediately. Encoding occurs on the worker. */
@@ -244,7 +250,7 @@ public final class StructuredRobotDataClient implements Closeable {
      * in the raw recording for audit and later replay.
      */
     public boolean publishSample(Map<String, ?> values, boolean highlighted) {
-        if (!running.get()) return false;
+        if (!running.get() || transportMode == DataTransportMode.OFF) return false;
         Map<String, Object> copy = new LinkedHashMap<>();
         for (Map.Entry<String, ?> entry : values.entrySet()) copy.put(entry.getKey(), entry.getValue());
         Set<String> expected = signalIds(); expected.remove(LOOP_TIME_SIGNAL_ID);
@@ -277,7 +283,7 @@ public final class StructuredRobotDataClient implements Closeable {
 
     /** Captures configured values and gamepads with the supplied incident state. */
     public boolean publishLoop(boolean highlighted) {
-        if (!running.get()) return false;
+        if (!running.get() || transportMode == DataTransportMode.OFF) return false;
         boolean sampleQueued = publishSample(createDataSnapshot(), highlighted);
         boolean gamepadsQueued = boundGamepad1 == null
                 ? true
@@ -297,14 +303,14 @@ public final class StructuredRobotDataClient implements Closeable {
     }
 
     public boolean publishGamepads(Gamepad gamepad1, Gamepad gamepad2) {
-        if (!running.get()) return false;
+        if (!running.get() || transportMode == DataTransportMode.OFF) return false;
         if (gamepad1 == null || gamepad2 == null) throw new IllegalArgumentException("gamepads must not be null");
         return enqueue(new GamepadFrame(SystemClock.elapsedRealtimeNanos(), gamepad1, gamepad2));
     }
 
     /** Queue a control/debug envelope for the TCP writer. The common envelope header is added here. */
     public boolean publishMessage(Envelope.Builder message) {
-        if (message == null || message.getBodyCase() == Envelope.BodyCase.BODY_NOT_SET) return false;
+        if (transportMode == DataTransportMode.OFF || message == null || message.getBodyCase() == Envelope.BodyCase.BODY_NOT_SET) return false;
         return enqueue(new Message(SystemClock.elapsedRealtimeNanos(), message.build()));
     }
 
@@ -312,6 +318,8 @@ public final class StructuredRobotDataClient implements Closeable {
     public IncomingMessage pollIncomingMessage() { return incoming.poll(); }
 
     public boolean isConnected() { return connected.get(); }
+    /** The mode captured when this client was started; changing setup mode affects the next OpMode. */
+    public DataTransportMode transportMode() { return transportMode; }
     public void enableBenchmarks() { ensureNotStarted(); benchmarkMode=true; }
     public long connectionGeneration() { return connectionGeneration.get(); }
     public boolean serverSupportsBenchmarks() { return connected.get() && serverSupportsBenchmarks; }
@@ -346,6 +354,65 @@ public final class StructuredRobotDataClient implements Closeable {
             if (running.get()) try { Thread.sleep(backoff); backoff = Math.min(backoff * 2, 2000); }
             catch (InterruptedException ignored) { Thread.currentThread().interrupt(); return; }
         }
+    }
+
+    /**
+     * Record the same envelopes used by the laptop protocol, but never create
+     * a socket, datagram socket, or discovery request. This runs entirely off
+     * the FTC OpMode thread.
+     */
+    private void runLocal() {
+        try (LocalMatchRecorder recorder = new LocalMatchRecorder(sessionId)) {
+            Connection connection = new Connection(UUID.randomUUID());
+            long now = SystemClock.elapsedRealtimeNanos();
+            appendLocal(recorder, envelope(connection, now, value -> value.setHello(hello())), now);
+            now = SystemClock.elapsedRealtimeNanos();
+            appendLocal(recorder, envelope(connection, now, value -> value.setSchema(schema())), now);
+            long lastHeartbeat = SystemClock.elapsedRealtimeNanos();
+            while (running.get()) {
+                Outbound first;
+                try {
+                    first = reliableFrames.pollFirst();
+                    if (first == null) first = frames.pollFirst(20, TimeUnit.MILLISECONDS);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                if (first instanceof Sample) {
+                    List<Sample> batch = new ArrayList<>();
+                    batch.add((Sample) first);
+                    long deadline = SystemClock.elapsedRealtime() + BATCH_WINDOW_MS;
+                    while (batch.size() < MAX_BATCH && SystemClock.elapsedRealtime() < deadline) {
+                        Outbound next = frames.pollFirst();
+                        if (!(next instanceof Sample)) {
+                            if (next != null) frames.offerFirst(next);
+                            break;
+                        }
+                        batch.add((Sample) next);
+                    }
+                    Sample newest = batch.get(batch.size() - 1);
+                    appendLocal(recorder, envelope(connection, newest.robotTimeNs,
+                            value -> value.setSampleBatch(sampleBatch(batch))), newest.robotTimeNs);
+                } else if (first != null) {
+                    appendLocal(recorder, envelope(connection, first.robotTimeNs(), first::apply), first.robotTimeNs());
+                }
+                now = SystemClock.elapsedRealtimeNanos();
+                if (now - lastHeartbeat >= HEARTBEAT_INTERVAL_NS) {
+                    Heartbeat.Builder heartbeat = Heartbeat.newBuilder().setQueuedFrames(frames.size())
+                            .setDroppedSamples(droppedSamples.get());
+                    long last = nextSample.get() - 1;
+                    if (last >= 0) heartbeat.setLastSampleSequence(last);
+                    appendLocal(recorder, envelope(connection, now, value -> value.setHeartbeat(heartbeat)), now);
+                    lastHeartbeat = now;
+                }
+            }
+        } catch (IOException error) {
+            lastError = "Local recorder " + error.getClass().getSimpleName() + ": " + error.getMessage();
+        }
+    }
+
+    private void appendLocal(LocalMatchRecorder recorder, Envelope envelope, long robotTimeNs) throws IOException {
+        recorder.append(envelope.toByteArray(), robotTimeNs);
     }
 
     private void stream(Socket active, Connection connection) throws IOException {
@@ -496,9 +563,13 @@ public final class StructuredRobotDataClient implements Closeable {
     }
 
     private static IllegalArgumentException invalid(Signal signal, String expected) { return new IllegalArgumentException(signal.id + " must be " + expected); }
-    private void send(DataOutputStream output, Connection connection, long robotTimeNs, Populator body) throws IOException {
+    private Envelope envelope(Connection connection, long robotTimeNs, Populator body) {
         Envelope.Builder envelope = Envelope.newBuilder().setProtocolVersion(VERSION).setSessionId(uuid(sessionId)).setConnectionId(uuid(connection.id)).setConnectionSequence(connection.nextSequence++).setRobotElapsedNs(robotTimeNs);
-        body.apply(envelope); byte[] bytes = envelope.build().toByteArray();
+        body.apply(envelope);
+        return envelope.build();
+    }
+    private void send(DataOutputStream output, Connection connection, long robotTimeNs, Populator body) throws IOException {
+        byte[] bytes = envelope(connection, robotTimeNs, body).toByteArray();
         if (bytes.length == 0 || bytes.length > MAX_FRAME_BYTES) throw new IOException("invalid telemetry frame size"); output.writeInt(bytes.length); output.write(bytes);
     }
     private static Envelope readFrame(DataInputStream input) throws IOException { int length = input.readInt(); if (length <= 0 || length > MAX_FRAME_BYTES) throw new IOException("invalid server frame length"); byte[] bytes = new byte[length]; input.readFully(bytes); return Envelope.parseFrom(bytes); }

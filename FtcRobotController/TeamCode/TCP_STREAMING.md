@@ -6,6 +6,48 @@ then opens a framed TCP connection to the listener's returned port (5810 by
 default). Its worker thread handles discovery, reconnects, and network I/O, so
 never perform socket work or sleeps in an OpMode loop.
 
+## Persistent transport mode
+
+Before initializing a telemetry OpMode, run **FTC Advanced / Data Transport
+Setup** from the Driver Station. Its selection survives a normal Control Hub
+power cycle and affects subsequently initialized OpModes:
+
+- `OFF` is the safe default. It starts no data thread and performs no UDP,
+  TCP, or local recording.
+- `LOCAL_MATCH` writes framed protobuf `.ftclog` data under
+  `/sdcard/FIRST/data/ftc-advanced-recordings` on the Control Hub and never
+  creates a socket or sends a discovery packet.
+- `PIT_TCP` enables the normal laptop stream described below. Do not use it
+  for match play.
+
+The mode is captured at `StructuredRobotDataClient.start()`, so it cannot be
+changed beneath an active OpMode. Existing OpModes do not need a source change
+to honor the setting.
+
+For a dedicated laptop recorder, start this from the repository root before
+selecting a `PIT_TCP` OpMode:
+
+```text
+python -m web_driver_station.backend.record_robot_data
+```
+
+It listens on TCP 5810, answers discovery on UDP 5811, and persists every
+accepted raw protobuf frame in `web_driver_station/recordings`. It does not
+use ADB.
+
+To retrieve `LOCAL_MATCH` recordings after a match, connect the Control Hub by
+USB or ADB and run:
+
+```text
+adb devices -l
+python -m web_driver_station.backend.adb_export_robot_data --serial <CONTROL_HUB_SERIAL>
+```
+
+The importer pulls the Control Hub files into
+`web_driver_station/control_hub_recordings`, validates every `.ftclog` frame,
+and never deletes data from the robot. Run it only after match play; it is a
+post-match transfer tool, not a live telemetry channel.
+
 ## Standard pattern
 
 Add the client as an OpMode field. Configure every binding before `start()`,
