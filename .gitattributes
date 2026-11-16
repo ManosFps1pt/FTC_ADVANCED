@@ -1,0 +1,4 @@
+protocol/*.proto text eol=lf
+protocol/*.sha256 text eol=lf
+web_driver_station/backend/protocol/*_pb2.py text eol=lf
+web_driver_station/backend/fixtures/*.ftclog binary

@@ -16,11 +16,13 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from google.protobuf.message import DecodeError
 
-from web_driver_station.backend.ftclog import FtcLogError, iter_records
+from recording_viewer.backend.video_sync import is_original_video, is_video_sync_artifact, original_videos, video_job_routes
+from web_driver_station.backend.ftclog import FtcLogError, iter_records, is_closed_partial
 from web_driver_station.backend.debugger_results import DebuggerResults
 from web_driver_station.backend.debugger_api import install_result_reads
 from web_driver_station.backend.protocol import robot_data_pb2 as wire
 from web_driver_station.backend.protocol_codec import WireProtocolError, decode
+from web_driver_station.backend.recording_metadata import read_recording_metadata
 
 
 class RecordingLoadError(ValueError):
@@ -38,7 +40,7 @@ class RecordingLibrary:
             return []
         recordings: list[dict[str, Any]] = []
         for session_path in self.root_directory.iterdir():
-            if not session_path.is_dir() or session_path.name.startswith("."):
+            if session_path.is_symlink() or not session_path.is_dir() or session_path.name.startswith("."):
                 continue
             try:
                 session_id = str(uuid.UUID(session_path.name))
@@ -51,17 +53,19 @@ class RecordingLibrary:
             except (OSError, ValueError):
                 pass
             log_paths = sorted(raw_path.glob("stream-*.ftclog")) if raw_path.is_dir() else []
-            # A session becomes public only after the uploader's final rename,
-            # and a completed log must be present.  Partial files are never a
-            # sufficient condition for listing it.
-            if not log_paths:
+            closed_partials = [path for path in raw_path.glob("stream-*.ftclog.partial") if is_closed_partial(path)]
+            # The uploader publishes only closed streams. Preserve interruptions explicitly.
+            if not log_paths and not closed_partials:
                 continue
-            paths = [path for path in session_path.rglob("*") if path.is_file()]
+            paths = [path for path in session_path.rglob("*")
+                     if not is_video_sync_artifact(path) and path.is_file()]
             newest_ns = max((path.stat().st_mtime_ns for path in paths), default=session_path.stat().st_mtime_ns)
             recordings.append({
                 "id": session_id,
-                "logFileCount": len(log_paths),
-                "videoFileCount": sum(path.suffix.lower() == ".mp4" for path in paths),
+                "metadata": read_recording_metadata(session_path),
+                "logFileCount": len(log_paths) + len(closed_partials),
+                "interrupted": bool(closed_partials),
+                "videoFileCount": sum(is_original_video(path) for path in paths),
                 "sizeBytes": sum(path.stat().st_size for path in paths),
                 "modifiedAtNs": str(newest_ns),
             })
@@ -81,9 +85,10 @@ class RecordingLibrary:
 class Recording:
     """An immutable browser-oriented model reconstructed from raw .ftclog files."""
 
-    def __init__(self, recording_directory: Path) -> None:
+    def __init__(self, recording_directory: Path, *, log_file: Path | None = None) -> None:
         self.directory = _resolve_recording_directory(recording_directory)
         self.session_directory = self.directory.parent if self.directory.name == "raw" else self.directory
+        self.metadata = read_recording_metadata(self.session_directory)
         self.catalog: dict[str, Any] | None = None
         self.session: dict[str, Any] | None = None
         self.snapshots: list[dict[str, Any]] = []
@@ -95,13 +100,14 @@ class Recording:
         self.log_files: list[str] = []
         self.invalid_frames = 0
         self.video_clips: list[Path] = []
-        self._load()
+        self._load(log_file)
 
     def summary(self) -> dict[str, Any]:
         start_ns = self.snapshots[0]["robotTimeNs"] if self.snapshots else None
         end_ns = self.snapshots[-1]["robotTimeNs"] if self.snapshots else None
         return {
             "recordingDirectory": str(self.directory),
+            "metadata": self.metadata,
             "session": self.session,
             "catalog": self.catalog,
             "snapshotCount": len(self.snapshots),
@@ -113,6 +119,7 @@ class Recording:
             "startRobotTimeNs": start_ns,
             "endRobotTimeNs": end_ns,
             "logFiles": self.log_files,
+            "interrupted": any(name.endswith(".partial") for name in self.log_files),
             "invalidFrames": self.invalid_frames,
             "videoClips": [
                 {"index": index, "name": path.relative_to(self.session_directory).as_posix(), "url": f"/api/recording/video/{index}"}
@@ -131,9 +138,11 @@ class Recording:
             "incidents": self.incidents,
         }
 
-    def _load(self) -> None:
+    def _load(self, log_file: Path | None) -> None:
         channel_keys: dict[int, tuple[str, int]] = {}
-        log_paths = sorted((*self.directory.glob("stream-*.ftclog"), *self.directory.glob("stream-*.ftclog.partial")))
+        log_paths = [log_file] if log_file is not None else sorted(
+            (*self.directory.glob("stream-*.ftclog"), *self.directory.glob("stream-*.ftclog.partial"))
+        )
         if not log_paths:
             raise RecordingLoadError(f"No .ftclog files found in {self.directory}")
         for log_path in log_paths:
@@ -148,10 +157,7 @@ class Recording:
         self.gamepad_frames.sort(key=lambda frame: int(frame["robotTimeNs"]))
         if self.session is None:
             raise RecordingLoadError("Recording contains no hello/session metadata")
-        self.video_clips = sorted(
-            path for path in self.session_directory.rglob("*.mp4")
-            if path.is_file() and ".partial" not in path.name
-        )
+        self.video_clips = original_videos(self.session_directory)
         self.incidents = _load_incidents(self.session_directory)
         _apply_incidents(self.snapshots, self.incidents)
 
@@ -311,9 +317,15 @@ def create_library_app(recordings_root: Path) -> FastAPI:
         allow_headers=["*"],
     )
 
+    def get_recording_path(session_id: str) -> Path:
+        try:
+            return library.recording_path(session_id)
+        except RecordingLoadError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
     def get_recording(session_id: str) -> Recording:
         try:
-            return Recording(library.recording_path(session_id))
+            return Recording(get_recording_path(session_id))
         except RecordingLoadError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
@@ -345,6 +357,8 @@ def create_library_app(recordings_root: Path) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(error)) from error
         return FileResponse(path, media_type="video/mp4", filename=path.name)
 
+    app.include_router(video_job_routes(get_recording_path, lambda session_id: Recording(library.recording_path(session_id))),
+                       prefix="/api/recordings")
     _mount_frontend(app)
     return app
 

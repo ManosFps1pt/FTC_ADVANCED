@@ -535,6 +535,8 @@ class ControlHubClient:
     _COMMAND_MAX_ATTEMPTS: Final = 10
     _GAMEPAD_INTERVAL_S: Final = 0.04
     _GAMEPAD_IDLE_GRACE_S: Final = 1.0
+    _CONTROL_LEASE_S: Final = 0.5
+    _HEARTBEAT_FRESH_NS: Final = 1_000_000_000
     _STOP_OPMODE_NAME: Final = "$Stop$Robot$"
     # Sent by OpModeManagerImpl.handleSendStacktrace() when user code throws.
     _CMD_SHOW_STACKTRACE: Final = "CMD_SHOW_STACKTRACE"
@@ -555,6 +557,8 @@ class ControlHubClient:
         self._robot_state = RobotState.UNKNOWN
         self._pending_commands: dict[tuple[str, int], _PendingCommand] = {}
         self._gamepads: dict[int, _GamepadSlot] = {}
+        self._control_lease: str | None = None
+        self._control_deadline = 0.0
         self._opmode_list_event = threading.Event()
         self._opmodes: tuple[dict[str, object], ...] = ()
         self._init_notifications: dict[str, threading.Event] = {}
@@ -580,7 +584,10 @@ class ControlHubClient:
     @property
     def is_connected(self) -> bool:
         """Whether peer discovery has been accepted by the Robot Controller."""
-        return self._accepted_event.is_set() and not self._stop_event.is_set()
+        heartbeat = self._last_heartbeat_ns
+        return (self._accepted_event.is_set() and not self._stop_event.is_set()
+                and heartbeat is not None
+                and 0 <= time.monotonic_ns() - heartbeat <= self._HEARTBEAT_FRESH_NS)
 
     @property
     def robot_state(self) -> RobotState:
@@ -609,7 +616,45 @@ class ControlHubClient:
         with self._lock:
             self._opmode_exception_listeners.append(listener)
 
-    def set_gamepad_input(self, gamepad: GamepadInput) -> None:
+    def acquire_control(self) -> str:
+        """Explicitly acquire exclusive, short-lived browser control."""
+        import secrets
+        self._require_connected()
+        with self._lock:
+            self._expire_control(time.monotonic())
+            if self._control_lease is not None:
+                raise ControlHubError("Another controller owns the control lease")
+            self._control_lease = secrets.token_urlsafe(24)
+            self._control_deadline = time.monotonic() + self._CONTROL_LEASE_S
+            self._neutralize_gamepads()
+            return self._control_lease
+
+    def renew_control(self, lease_id: str) -> None:
+        self._require_connected()
+        with self._lock:
+            self._require_control(lease_id)
+            self._control_deadline = time.monotonic() + self._CONTROL_LEASE_S
+
+    def release_control(self) -> None:
+        with self._lock:
+            self._control_lease = None
+            self._control_deadline = 0.0
+            self._neutralize_gamepads()
+
+    def _neutralize_gamepads(self) -> None:
+        for user in (1, 2):
+            self._gamepads[user] = _GamepadSlot(input=GamepadInput.neutral(user), updated_at=time.monotonic())
+
+    def _expire_control(self, now: float) -> None:
+        if self._control_lease is not None and (now >= self._control_deadline or not self.is_connected):
+            self.release_control()
+
+    def _require_control(self, lease_id: str | None) -> None:
+        self._expire_control(time.monotonic())
+        if lease_id is None or lease_id != self._control_lease:
+            raise ControlHubError("Control lease expired; explicitly acquire control again")
+
+    def set_gamepad_input(self, gamepad: GamepadInput, lease_id: str | None = None) -> None:
         """Assign the normalized state for a driver slot.
 
         Active states are sent every 40 ms once peer discovery is accepted. A
@@ -617,6 +662,8 @@ class ControlHubClient:
         clears previously held input before idle traffic stops.
         """
         with self._lock:
+            if not gamepad.is_at_rest:
+                self._require_control(lease_id)
             self._gamepads[gamepad.user] = _GamepadSlot(
                 input=gamepad,
                 updated_at=time.monotonic(),
@@ -783,7 +830,7 @@ class ControlHubClient:
 
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            if self._accepted_event.wait(timeout=0.05):
+            if self._accepted_event.wait(timeout=0.05) and self.is_connected:
                 return
             if self._rejected_event.is_set():
                 self.close()
@@ -801,6 +848,8 @@ class ControlHubClient:
     def close(self) -> None:
         """Stop background I/O and release the UDP port."""
         self._stop_event.set()
+        self._accepted_event.clear()
+        self.release_control()
         sock, self._socket = self._socket, None
         if sock is not None:
             sock.close()
@@ -830,6 +879,8 @@ class ControlHubClient:
             self._robot_state = RobotState.UNKNOWN
             self._pending_commands.clear()
             self._gamepads.clear()
+            self._control_lease = None
+            self._control_deadline = 0.0
             self._opmodes = ()
             self._init_notifications.clear()
             self._run_notifications.clear()
@@ -877,6 +928,9 @@ class ControlHubClient:
 
     def _send_due_commands(self, now: float) -> None:
         with self._lock:
+            if not self.is_connected:
+                self._pending_commands.clear()
+                return
             pending_commands = tuple(self._pending_commands.items())
         for identity, pending in pending_commands:
             if now < pending.next_attempt_at:
@@ -893,13 +947,15 @@ class ControlHubClient:
     def _send_due_gamepads(self, now: float) -> None:
         """Send active gamepads, plus a brief neutralization period at rest."""
         with self._lock:
-            gamepads = tuple(self._gamepads.values())
-        for slot in gamepads:
-            input_age = now - slot.updated_at
-            if not slot.force_send and slot.input.is_at_rest and input_age > self._GAMEPAD_IDLE_GRACE_S:
-                continue
-            self._send(self._encode_gamepad(slot.input))
-            slot.force_send = False
+            self._expire_control(now)
+            # Serialize release with transmission. A slot captured outside this
+            # lock could still transmit held input after release replaced it.
+            for slot in self._gamepads.values():
+                input_age = now - slot.updated_at
+                if not slot.force_send and slot.input.is_at_rest and input_age > self._GAMEPAD_IDLE_GRACE_S:
+                    continue
+                self._send(self._encode_gamepad(slot.input))
+                slot.force_send = False
 
     def _route_local_address(self) -> str:
         """Ask Windows/the OS which local IPv4 address reaches the RC."""
@@ -911,6 +967,13 @@ class ControlHubClient:
             probe.close()
 
     def _run(self) -> None:
+        try:
+            self._run_loop()
+        finally:
+            self._accepted_event.clear()
+            self.release_control()
+
+    def _run_loop(self) -> None:
         next_discovery = 0.0
         next_heartbeat = 0.0
         next_gamepad = 0.0
@@ -930,6 +993,8 @@ class ControlHubClient:
                         next_gamepad = now + self._GAMEPAD_INTERVAL_S
                 self._receive_one()
             except (OSError, ValueError) as error:
+                self._accepted_event.clear()
+                self.release_control()
                 if not self._stop_event.is_set():
                     LOG.warning("Robocol I/O stopped: %s", error)
                 return

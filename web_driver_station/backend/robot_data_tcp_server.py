@@ -43,12 +43,12 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         try:
             magic, version, nonce = _DISCOVERY_REQUEST.unpack(data)
-            if magic != _DISCOVERY_MAGIC or version != _DISCOVERY_VERSION:
+            if magic != _DISCOVERY_MAGIC or version not in (2, 3):
                 return
         except struct.error:
             return
         if self.transport is not None:
-            self.transport.sendto(_DISCOVERY_RESPONSE.pack(_DISCOVERY_MAGIC, _DISCOVERY_VERSION, nonce, self._tcp_port), addr)
+            self.transport.sendto(_DISCOVERY_RESPONSE.pack(_DISCOVERY_MAGIC, version, nonce, self._tcp_port), addr)
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,21 +142,35 @@ class RobotDataTcpServer:
         await self._write_packet(writer, envelope)
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        if len(self._clients) >= 4:
+            writer.close()
+            return
         self._clients.add(writer)
         peer = _normalize_peer(writer.get_extra_info("peername"))
         if peer is not None:
             self._writers[peer] = writer
         self._writer_locks[writer] = asyncio.Lock()
         channel_keys: dict[int, tuple[str, int]] = {}
+        identity = None
+        last_sequence = -1
         await self._notify_connection(True, peer)
         try:
             while True:
-                length = _LENGTH_PREFIX.unpack(await reader.readexactly(_LENGTH_PREFIX.size))[0]
+                length = _LENGTH_PREFIX.unpack(await asyncio.wait_for(reader.readexactly(_LENGTH_PREFIX.size), 5))[0]
                 if length == 0 or length > self.max_packet_bytes:
                     raise RobotDataProtocolError("invalid protobuf frame length")
-                encoded = await reader.readexactly(length)
+                encoded = await asyncio.wait_for(reader.readexactly(length), 5)
                 try:
                     envelope = wire.Envelope.FromString(encoded)
+                    if envelope.protocol_version == 3:
+                        incoming_identity = (envelope.session_id, envelope.connection_id)
+                        if identity is None:
+                            if not envelope.HasField("hello"):
+                                raise WireProtocolError("Hello required before session data")
+                            identity = incoming_identity
+                        if identity != incoming_identity or envelope.connection_sequence <= last_sequence:
+                            raise WireProtocolError("Session identity or sequence mismatch")
+                        last_sequence = envelope.connection_sequence
                     received_monotonic_ns = time.perf_counter_ns()
                     if self._raw_packet_handler is not None:
                         result = self._raw_packet_handler(envelope, encoded, peer, received_monotonic_ns)
@@ -170,7 +184,7 @@ class RobotDataTcpServer:
                     result = self._packet_handler(packet)
                     if inspect.isawaitable(result): result = await result
                     if result is not None: await self._write_packet(writer, result)
-        except (asyncio.IncompleteReadError, ConnectionError, RobotDataProtocolError):
+        except (asyncio.IncompleteReadError, ConnectionError, RobotDataProtocolError, asyncio.TimeoutError):
             pass
         finally:
             self._clients.discard(writer)
@@ -191,7 +205,12 @@ class RobotDataTcpServer:
         if not encoded or len(encoded) > self.max_packet_bytes: raise RobotDataProtocolError("invalid response frame length")
         lock = self._writer_locks.setdefault(writer, asyncio.Lock())
         async with lock:
-            writer.write(_LENGTH_PREFIX.pack(len(encoded)) + encoded); await writer.drain()
+            writer.write(_LENGTH_PREFIX.pack(len(encoded)) + encoded)
+            try:
+                await asyncio.wait_for(writer.drain(), timeout=1.0)
+            except (TimeoutError, ConnectionError):
+                writer.close()
+                raise
 
 
 def _normalize_peer(value: object) -> tuple[str, int] | None:

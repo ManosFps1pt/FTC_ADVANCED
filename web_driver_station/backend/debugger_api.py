@@ -52,6 +52,7 @@ def install_result_reads(app: FastAPI, results: DebuggerResults) -> None:
 
 
 class RunRequest(BaseModel):
+    lease_id: str | None = None
     node_id: str
     tool_instance_id: str
     benchmark_id: str = "motor.friction.v1"
@@ -60,6 +61,10 @@ class RunRequest(BaseModel):
     max_voltage: float = Field(default=12, ge=.1, le=12, allow_inf_nan=False)
     reverse: bool = False
     inputs: dict[str, object] | None = None
+
+
+class LeaseRequest(BaseModel):
+    lease_id: str | None = None
 
 
 class StorageRequest(BaseModel):
@@ -71,8 +76,8 @@ def install_debugger_controls(app: FastAPI, service) -> None:
     install_result_reads(app, results)
     uploads: dict[str, dict] = {}
 
-    async def send_command(run_id: str, command: str, metadata: dict, arguments=()):
-        envelope = service._debug_envelope(debug_command_request=wire.DebugCommandRequest(
+    async def send_command(run_id: str, command: str, metadata: dict, arguments=(), lease_id=None):
+        envelope = service._debug_envelope(lease_id=lease_id, debug_command_request=wire.DebugCommandRequest(
             request_id=run_id, node_id=metadata["nodeId"], tool_instance_id=metadata["toolInstanceId"],
             command_id=command, ttl_ms=1000, arguments=arguments))
         await service._server.send(envelope, service._active_peer)
@@ -120,17 +125,17 @@ def install_debugger_controls(app: FastAPI, service) -> None:
         if run_id not in results.pending:
             results.expect(run_id, metadata)
         try:
-            await send_command(run_id, "benchmark.run", metadata, arguments)
+            await send_command(run_id, "benchmark.run", metadata, arguments, request.lease_id)
         except (RuntimeError, OSError) as error:
             results.pending[run_id].update(state="incomplete", message=str(error))
             raise HTTPException(409, str(error)) from error
         return {"runId": run_id}
 
     @app.post("/api/debug/runs/{run_id}/keepalive")
-    async def keepalive(run_id: str):
+    async def keepalive(run_id: str, request: LeaseRequest):
         metadata = results.pending.get(run_id)
         if metadata and metadata.get("state") in ("awaiting_acceptance", "running"):
-            try: await send_command(run_id, "benchmark.keepalive", metadata)
+            try: await send_command(run_id, "benchmark.keepalive", metadata, lease_id=request.lease_id)
             except (RuntimeError, OSError) as error: raise HTTPException(409, str(error)) from error
         return {"ok": True}
 

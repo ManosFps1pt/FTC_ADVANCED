@@ -8,6 +8,7 @@ format: replay views and analysis tables can be regenerated from it later.
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import struct
 import threading
@@ -42,8 +43,13 @@ class FtcLogRecord:
 class RawFtcLogRecorder:
     """Append raw frames to session-scoped files and atomically finalize them."""
 
-    def __init__(self, recordings_root: Path) -> None:
+    def __init__(self, recordings_root: Path, *, max_bytes: int = 4 * 1024**3, max_sessions: int = 256) -> None:
+        if max_bytes < _HEADER.size or max_sessions < 1:
+            raise ValueError("Recording storage bounds must be positive")
         self._recordings_root = recordings_root
+        self._max_bytes, self._max_sessions = max_bytes, max_sessions
+        self._used_bytes: int | None = None
+        self._failed_sessions: set[str] = set()
         self._writers: dict[str, tuple[Path, object]] = {}
         self._lock = threading.RLock()
         self._last_error: str | None = None
@@ -58,6 +64,7 @@ class RawFtcLogRecorder:
                 "active_log_count": len(self._writers),
                 "active_sessions": sorted(self._writers),
                 "last_error": self._last_error,
+                "failed_sessions": sorted(self._failed_sessions),
                 "recordings_root": str(self._recordings_root),
             }
 
@@ -71,23 +78,34 @@ class RawFtcLogRecorder:
             raise FtcLogError("Receipt timestamp must be non-negative")
         with self._lock:
             try:
+                if normalized_session_id in self._failed_sessions:
+                    raise OSError("Recording failed earlier; preserve its partial file and start a new session")
+                if self._used_bytes is None:
+                    self._used_bytes = sum(path.stat().st_size for path in self._recordings_root.glob("*/raw/*") if path.is_file())
+                size = _RECORD_PREFIX.size + len(protobuf_frame) + _CRC.size
+                if self._used_bytes + size + _HEADER.size > self._max_bytes:
+                    raise OSError("Recording storage quota reached; retrieve or delete old recordings")
                 partial_path, handle = self._writers.get(normalized_session_id, (None, None))
                 if partial_path is None or handle is None:
                     partial_path, handle = self._open_log(normalized_session_id)
                     self._writers[normalized_session_id] = (partial_path, handle)
+                    self._used_bytes += _HEADER.size
                 payload = _RECORD_PREFIX.pack(len(protobuf_frame), received_monotonic_ns, len(protobuf_frame)) + protobuf_frame
                 checksum = zlib.crc32(payload) & 0xFFFFFFFF
                 handle.write(payload)
                 handle.write(_CRC.pack(checksum))
                 handle.flush()
+                self._used_bytes += size
                 self._last_error = None
                 return partial_path
             except OSError as error:
+                if normalized_session_id in self._writers:
+                    self._failed_sessions.add(normalized_session_id)
                 self._last_error = str(error)
                 raise FtcLogError(f"Could not write .ftclog: {error}") from error
 
-    def close_session(self, session_id: str) -> Path | None:
-        """Finalize the active file for a session and return its final path."""
+    def close_session(self, session_id: str, *, complete: bool = True) -> Path | None:
+        """Flush and close; only complete sessions receive a finalized filename."""
 
         normalized_session_id = _normalize_session_id(session_id)
         with self._lock:
@@ -96,9 +114,23 @@ class RawFtcLogRecorder:
                 return None
             partial_path, handle = entry
             try:
-                handle.flush()
-                os.fsync(handle.fileno())
-                handle.close()
+                try:
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                finally:
+                    handle.close()
+                if not complete or normalized_session_id in self._failed_sessions:
+                    # A closed interrupted stream is safe to archive, but remains visibly partial.
+                    # An active/crash file has no marker and must never be uploaded as finalized.
+                    if normalized_session_id not in self._failed_sessions:
+                        marker = Path(str(partial_path) + ".closed.json")
+                        temporary = marker.with_suffix(".partial")
+                        with temporary.open("w", encoding="utf-8") as status:
+                            json.dump({"closed": True, "complete": False}, status)
+                            status.flush()
+                            os.fsync(status.fileno())
+                        os.replace(temporary, marker)
+                    return partial_path
                 final_path = partial_path.with_suffix("")
                 os.replace(partial_path, final_path)
                 self._last_error = None
@@ -110,8 +142,14 @@ class RawFtcLogRecorder:
     def close_all(self) -> None:
         with self._lock:
             session_ids = tuple(self._writers)
+        errors = []
         for session_id in session_ids:
-            self.close_session(session_id)
+            try:
+                self.close_session(session_id, complete=False)
+            except FtcLogError as error:
+                errors.append(str(error))
+        if errors:
+            raise FtcLogError("; ".join(errors))
 
     def list_sessions(self) -> list[dict[str, object]]:
         if not self._recordings_root.is_dir():
@@ -129,7 +167,7 @@ class RawFtcLogRecorder:
 
     def log_path(self, session_id: str, log_name: str) -> Path:
         normalized_session_id = _normalize_session_id(session_id)
-        if not log_name.startswith("stream-") or not log_name.endswith(".ftclog") or "/" in log_name or "\\" in log_name:
+        if not log_name.startswith("stream-") or not log_name.endswith((".ftclog", ".ftclog.partial")) or "/" in log_name or "\\" in log_name:
             raise FtcLogError("Invalid .ftclog file name")
         path = self._recordings_root / normalized_session_id / "raw" / log_name
         if not path.is_file():
@@ -154,8 +192,13 @@ class RawFtcLogRecorder:
                 raise FtcLogError("Cannot delete an active recording session")
             path = self.session_path(normalized_session_id)
             shutil.rmtree(path)
+            self._used_bytes = None
+            self._failed_sessions.discard(normalized_session_id)
 
     def _open_log(self, session_id: str) -> tuple[Path, object]:
+        sessions = [path for path in self._recordings_root.iterdir() if path.is_dir() and _is_session_id(path.name)] if self._recordings_root.exists() else []
+        if len(sessions) >= self._max_sessions and not (self._recordings_root / session_id).exists():
+            raise OSError("Retained recording session limit reached")
         raw_path = self._recordings_root / session_id / "raw"
         raw_path.mkdir(parents=True, exist_ok=True)
         indices = [int(path.stem.split("-")[-1]) for path in raw_path.glob("stream-*.ftclog")]
@@ -163,9 +206,24 @@ class RawFtcLogRecorder:
         index = max(indices, default=-1) + 1
         partial_path = raw_path / f"stream-{index:05d}.ftclog.partial"
         handle = partial_path.open("xb")
-        handle.write(_HEADER.pack(_MAGIC, FORMAT_VERSION, _HEADER.size, uuid.UUID(session_id).bytes, time.perf_counter_ns()))
-        handle.flush()
+        try:
+            handle.write(_HEADER.pack(_MAGIC, FORMAT_VERSION, _HEADER.size, uuid.UUID(session_id).bytes, time.perf_counter_ns()))
+            handle.flush()
+        except OSError:
+            handle.close()
+            raise
         return partial_path, handle
+
+
+def is_closed_partial(path: Path) -> bool:
+    """True only for an interrupted raw stream explicitly closed by the recorder."""
+    if path.parent.name != "raw" or not path.name.startswith("stream-") or not path.name.endswith(".ftclog.partial"):
+        return False
+    try:
+        marker = json.loads(Path(str(path) + ".closed.json").read_text(encoding="utf-8"))
+        return marker.get("closed") is True and marker.get("complete") is False
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def iter_records(path: Path) -> Iterator[FtcLogRecord]:
@@ -177,7 +235,10 @@ def iter_records(path: Path) -> Iterator[FtcLogRecord]:
             if len(header) != _HEADER.size:
                 raise FtcLogError("Truncated .ftclog header")
             magic, version, header_size, _session_id, _started_ns = _HEADER.unpack(header)
-            if magic != _MAGIC or version != FORMAT_VERSION or header_size != _HEADER.size:
+            # Early Android writers emitted the complete 36-byte v1 header but
+            # declared 32. Only accept that exact legacy layout; records below
+            # still require matching lengths and CRCs. Never rewrite the source.
+            if magic != _MAGIC or version != FORMAT_VERSION or header_size not in (_HEADER.size, 32):
                 raise FtcLogError("Unsupported .ftclog header")
             while True:
                 prefix = handle.read(_RECORD_PREFIX.size)

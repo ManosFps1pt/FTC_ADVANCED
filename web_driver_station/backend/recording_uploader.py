@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Callable
 
 from ftc_local_config import LocalConfigError, local_config_path, section
+from .ftclog import is_closed_partial
 
 
 class RecordingUploadError(RuntimeError):
@@ -328,10 +329,11 @@ def _validated_session(recording_directory: Path) -> tuple[Path, str, list[Path]
     raw_directory = source / "raw"
     log_files = list(raw_directory.glob("stream-*.ftclog")) if raw_directory.is_dir() else []
     partial_files = list(source.rglob("*.partial")) if source.is_dir() else []
-    if not log_files:
-        raise RecordingUploadError("Recording has no finalized .ftclog file")
-    if partial_files:
-        raise RecordingUploadError("Recording still contains partial files; wait until recording finalizes")
+    closed_partial_files = [path for path in partial_files if is_closed_partial(path)]
+    if not log_files and not closed_partial_files:
+        raise RecordingUploadError("Recording has no finalized or closed interrupted .ftclog file")
+    if len(closed_partial_files) != len(partial_files):
+        raise RecordingUploadError("Recording still contains active or unclosed partial files; wait until recording finalizes")
     files: list[Path] = []
     for path in source.rglob("*"):
         if path.is_symlink():

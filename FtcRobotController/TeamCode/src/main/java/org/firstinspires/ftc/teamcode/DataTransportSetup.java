@@ -3,7 +3,7 @@ package org.firstinspires.ftc.teamcode;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
-import org.firstinspires.ftc.teamcode.data.DataTransportMode;
+import io.github.manosfps1pt.ftclogger.DataTransportMode;
 
 /** Select the data destination for subsequently initialized OpModes. */
 @TeleOp(name = "Data Transport Setup", group = "FTC Advanced")

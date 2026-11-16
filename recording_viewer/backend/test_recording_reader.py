@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 import uuid
@@ -9,6 +10,7 @@ from pathlib import Path
 from web_driver_station.backend.ftclog import RawFtcLogRecorder
 from web_driver_station.backend.incidents import IncidentRecorder
 from web_driver_station.backend.protocol import robot_data_pb2 as wire
+from web_driver_station.backend.recording_metadata import RECORDING_METADATA_FILE
 
 from .main import Recording, RecordingLibrary
 
@@ -59,8 +61,14 @@ class RecordingReaderTests(unittest.TestCase):
             root = Path(temporary_directory)
             complete_id = str(uuid.uuid4())
             incomplete_id = str(uuid.uuid4())
-            (root / complete_id / "raw").mkdir(parents=True)
-            (root / complete_id / "raw" / "stream-00000.ftclog").write_bytes(b"log")
+            recorder = RawFtcLogRecorder(root)
+            hello = wire.Envelope(
+                protocol_version=2, session_id=uuid.UUID(complete_id).bytes,
+                connection_id=uuid.uuid4().bytes, connection_sequence=1,
+                hello=wire.Hello(robot_id="robot", robot_name="Replay Bot", op_mode_name="Test"),
+            )
+            recorder.append(complete_id, hello.SerializeToString(), 1)
+            recorder.close_session(complete_id)
             (root / complete_id / "video").mkdir()
             (root / complete_id / "video" / "field.mp4").write_bytes(b"video")
             (root / incomplete_id / "raw").mkdir(parents=True)
@@ -71,6 +79,24 @@ class RecordingReaderTests(unittest.TestCase):
 
             self.assertEqual([complete_id], [item["id"] for item in recordings])
             self.assertEqual(1, recordings[0]["videoFileCount"])
+            self.assertIsNone(recordings[0]["metadata"])
+
+            for name in ("field.sync.json", "field.synced.mp4", ".video-sync-test.partial.mp4"):
+                artifact = root / complete_id / "video" / name
+                artifact.write_bytes(b"generated")
+                later = int(recordings[0]["modifiedAtNs"]) + 5_000_000_000
+                os.utime(artifact, ns=(later, later))
+            self.assertEqual(recordings, RecordingLibrary(root).list())
+
+            metadata_path = root / complete_id / RECORDING_METADATA_FILE
+            metadata = {"title": "Αυτόνομη δοκιμή", "description": "First run\n\nTurned early."}
+            metadata_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+            self.assertEqual(metadata, RecordingLibrary(root).list()[0]["metadata"])
+            self.assertEqual(metadata, Recording(root / complete_id).browser_model()["metadata"])
+
+            metadata_path.write_text('{"title": 7}', encoding="utf-8")
+            self.assertIsNone(RecordingLibrary(root).list()[0]["metadata"])
+            self.assertIsNone(Recording(root / complete_id).browser_model()["metadata"])
 
     def test_reads_incidents_and_telemetry_lab_command_confirmations(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -145,6 +171,37 @@ class RecordingReaderTests(unittest.TestCase):
                 {"x": 24.5, "y": 111.25, "headingRad": 1.57079632679},
                 response["snapshots"][0]["values"]["localization.pose"],
             )
+
+
+    def test_v3_shooter_batch_keeps_10ms_timestamps_and_interrupted_segment(self) -> None:
+        from web_driver_station.backend.recording_uploader import _validated_session
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recorder = RawFtcLogRecorder(root)
+            session, connection = uuid.uuid4().bytes, uuid.uuid4().bytes
+            session_text = str(uuid.UUID(bytes=session))
+            def frame(**body):
+                return wire.Envelope(protocol_version=3, session_id=session, connection_id=connection,
+                                     robot_elapsed_ns=1_010_000_000, **body).SerializeToString()
+            recorder.append(session_text, frame(hello=wire.Hello(robot_id="test", robot_name="Shooter test", op_mode_name="Main TeleOp")), 1)
+            recorder.append(session_text, frame(schema=wire.Schema(revision=1, channels=[
+                wire.Channel(channel_id=1, key="shooter.measuredRpm", label="Shooter measured RPM",
+                             quantity="velocity", unit="RPM", value_type=wire.FLOAT64, role=wire.MEASURED),
+            ])), 2)
+            recorder.append(session_text, frame(sample_batch=wire.SampleBatch(snapshots=[
+                wire.Snapshot(sample_sequence=1, schema_revision=1, robot_time_ns=1_000_000_000,
+                              values=[wire.ChannelValue(channel_id=1, float64_value=3000)]),
+                wire.Snapshot(sample_sequence=2, schema_revision=1, robot_time_ns=1_010_000_000,
+                              values=[wire.ChannelValue(channel_id=1, float64_value=2700)]),
+            ])), 3)
+            recorder.close_session(session_text, complete=False)
+            _validated_session(root / session_text)
+            self.assertTrue(RecordingLibrary(root).list()[0]["interrupted"])
+            recording = Recording(root / session_text)
+            self.assertEqual(0, recording.invalid_frames)
+            self.assertTrue(recording.summary()["interrupted"])
+            self.assertEqual(["1000000000", "1010000000"], [s["robotTimeNs"] for s in recording.snapshots])
+            self.assertEqual([3000, 2700], [s["values"]["shooter.measuredRpm"] for s in recording.snapshots])
 
 
 if __name__ == "__main__":

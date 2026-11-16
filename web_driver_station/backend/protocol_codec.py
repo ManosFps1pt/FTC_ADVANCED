@@ -10,7 +10,7 @@ from typing import Any
 
 from .protocol import robot_data_pb2 as wire
 
-WIRE_PROTOCOL_VERSION = 2
+WIRE_PROTOCOL_VERSION = 3
 
 
 class WireProtocolError(ValueError):
@@ -24,7 +24,7 @@ def _uuid(value: bytes, name: str) -> str:
 
 
 def _common(envelope: wire.Envelope, message_type: str, data: Mapping[str, Any]) -> dict[str, Any]:
-    if envelope.protocol_version != WIRE_PROTOCOL_VERSION:
+    if envelope.protocol_version not in (2, WIRE_PROTOCOL_VERSION):
         raise WireProtocolError("unsupported telemetry protocol version")
     return {
         "protocol": "ftc-telemetry",
@@ -60,7 +60,8 @@ def decode(envelope: wire.Envelope, channel_keys: dict[int, tuple[str, int]]) ->
         channel_keys.update({channel.channel_id: (channel.key, channel.value_type) for channel in value.channels})
         return (_common(envelope, "catalog", {
             "schemaRevision": value.revision,
-            "devices": [{"id": item.key, "label": item.label, "subsystem": item.subsystem, "deviceType": item.device_type} for item in value.devices],
+            "devices": [{"id": item.key, "label": item.label, "subsystem": item.subsystem, "deviceType": item.device_type,
+                         "displayHints": dict(item.display_hints)} for item in value.devices],
             "signals": [{
                 "id": item.key, "label": item.label,
                 **({"deviceId": devices[item.device_id]} if item.device_id else {}),
@@ -69,6 +70,7 @@ def decode(envelope: wire.Envelope, channel_keys: dict[int, tuple[str, int]]) ->
                 "role": wire.ChannelRole.Name(item.role).lower(),
                 **({"sampleHintHz": item.sample_hint_hz} if item.sample_hint_hz else {}),
                 **({"description": item.description} if item.description else {}),
+                **({"coordinateFrame": item.coordinate_frame} if item.coordinate_frame else {}),
             } for item in value.channels],
         }),)
     if body == "sample_batch":
@@ -91,10 +93,15 @@ def decode(envelope: wire.Envelope, channel_keys: dict[int, tuple[str, int]]) ->
                 # The normalized dashboard model represents int64 as a string
                 # because its browser API must retain every 64-bit value.
                 values[key] = str(raw) if raw is not None and value_type == wire.INT64 else raw
-            records.append(_common(envelope, "sample", {
+            normalized = _common(envelope, "sample", {
                 "sampleSequence": str(snapshot.sample_sequence), "schemaRevision": snapshot.schema_revision,
                 "highlighted": snapshot.highlighted, "values": values,
-            }))
+            })
+            if envelope.protocol_version >= 3:
+                if not snapshot.HasField("robot_time_ns"):
+                    raise WireProtocolError("v3 snapshots require acquisition time")
+                normalized["robotTimeNs"] = str(snapshot.robot_time_ns)
+            records.append(normalized)
         if not records:
             raise WireProtocolError("sample batch must not be empty")
         return tuple(records)
@@ -216,6 +223,7 @@ def decode(envelope: wire.Envelope, channel_keys: dict[int, tuple[str, int]]) ->
         return (_common(envelope, "debug_safety_state", {
             "tcpConnected": value.tcp_connected, "watchdogHealthy": value.watchdog_healthy,
             "outputAllowed": value.output_allowed, "blockedReason": value.blocked_reason,
+            "armed": value.armed, "controlLeaseId": value.control_lease_id,
         }),)
     if body in ("debug_run_header", "debug_run_chunk", "debug_run_end", "debug_run_status"):
         # Full datasets are consumed by the run recorder, not live telemetry history.

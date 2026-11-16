@@ -14,9 +14,12 @@ class RobotDataProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.packets = []
         self.raw_frames = []
+        self.packet_arrived = asyncio.Condition()
 
         async def receive(packet):
-            self.packets.append(packet)
+            async with self.packet_arrived:
+                self.packets.append(packet)
+                self.packet_arrived.notify_all()
             return None
 
         async def receive_raw(envelope, encoded, peer, received_monotonic_ns):
@@ -38,6 +41,10 @@ class RobotDataProtocolTests(unittest.IsolatedAsyncioTestCase):
         await writer.drain()
         return encoded
 
+    async def _wait_packets(self, count: int) -> None:
+        async with self.packet_arrived:
+            await asyncio.wait_for(self.packet_arrived.wait_for(lambda: len(self.packets) >= count), 3)
+
     def _envelope(self, **body) -> wire.Envelope:
         return wire.Envelope(protocol_version=2, session_id=self.session_id, connection_id=self.connection_id,
                              connection_sequence=len(self.packets), robot_elapsed_ns=123, **body)
@@ -54,7 +61,7 @@ class RobotDataProtocolTests(unittest.IsolatedAsyncioTestCase):
             wire.Snapshot(sample_sequence=7, schema_revision=1, values=[wire.ChannelValue(channel_id=1, float64_value=3.25)]),
             wire.Snapshot(sample_sequence=8, schema_revision=1, values=[wire.ChannelValue(channel_id=1, unavailable=True)]),
         ])))
-        await asyncio.sleep(0.05)
+        await self._wait_packets(3)
         writer.close(); await writer.wait_closed()
 
         self.assertEqual(3, len(self.packets))
@@ -76,7 +83,7 @@ class RobotDataProtocolTests(unittest.IsolatedAsyncioTestCase):
         await self._send(writer, self._envelope(sample_batch=wire.SampleBatch(snapshots=[
             wire.Snapshot(sample_sequence=1, schema_revision=1, values=[wire.ChannelValue(channel_id=1, int64_value=9_007_199_254_740_993)]),
         ])))
-        await asyncio.sleep(0.05)
+        await self._wait_packets(3)
         writer.close(); await writer.wait_closed()
         self.assertEqual("9007199254740993", self.packets[-1].payload["data"]["values"]["arm.ticks"])
 
@@ -91,7 +98,7 @@ class RobotDataProtocolTests(unittest.IsolatedAsyncioTestCase):
                 wire.ChannelValue(channel_id=1, pose2d_value=wire.Pose2d(x=24.5, y=111.25, heading_rad=1.57079632679)),
             ]),
         ])))
-        await asyncio.sleep(0.05)
+        await self._wait_packets(3)
         writer.close(); await writer.wait_closed()
         self.assertEqual(
             {"x": 24.5, "y": 111.25, "headingRad": 1.57079632679},
@@ -109,7 +116,7 @@ class RobotDataProtocolTests(unittest.IsolatedAsyncioTestCase):
                 wire.ChannelValue(channel_id=1, pose2d_value=wire.Pose2d(x=24.5, y=math.nan, heading_rad=0.0)),
             ]),
         ])))
-        await asyncio.sleep(0.05)
+        await self._wait_packets(3)
         writer.close(); await writer.wait_closed()
         self.assertIsNone(self.packets[-1].payload["data"]["values"]["localization.pose"])
 
@@ -122,7 +129,7 @@ class RobotDataProtocolTests(unittest.IsolatedAsyncioTestCase):
         await self._send(writer, self._envelope(sample_batch=wire.SampleBatch(snapshots=[
             wire.Snapshot(sample_sequence=1, schema_revision=1, highlighted=True, values=[wire.ChannelValue(channel_id=1, float64_value=2.0)]),
         ])))
-        await asyncio.sleep(0.05)
+        await self._wait_packets(3)
         writer.close(); await writer.wait_closed()
         self.assertTrue(self.packets[-1].payload["data"]["highlighted"])
 
@@ -130,7 +137,7 @@ class RobotDataProtocolTests(unittest.IsolatedAsyncioTestCase):
         reader, writer = await asyncio.open_connection("127.0.0.1", self.port)
         await self._send(writer, self._envelope(hello=wire.Hello(
             robot_id="robot", robot_name="Robot", op_mode_name="Debugger", capabilities=["debugger-v1"])))
-        await asyncio.sleep(0.02)
+        await self._wait_packets(1)
 
         request = wire.Envelope(
             protocol_version=2,
@@ -148,6 +155,41 @@ class RobotDataProtocolTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("request-1", received.debug_command_request.request_id)
         self.assertEqual("motor.stop", received.debug_command_request.command_id)
+        writer.close()
+        await writer.wait_closed()
+
+    async def test_v3_fragmented_hello_then_stale_sequence_is_disconnected(self) -> None:
+        reader, writer = await asyncio.open_connection("127.0.0.1", self.port)
+        hello = self._envelope(hello=wire.Hello(robot_id="robot", op_mode_name="Debugger"))
+        hello.protocol_version = 3
+        encoded = hello.SerializeToString()
+        frame = struct.pack("!I", len(encoded)) + encoded
+        for fragment in (frame[:1], frame[1:3], frame[3:8], frame[8:]):
+            writer.write(fragment)
+            await writer.drain()
+            await asyncio.sleep(0)
+        await self._wait_packets(1)
+        stale = self._envelope(heartbeat=wire.Heartbeat())
+        stale.protocol_version = 3
+        stale.connection_sequence = 0
+        await self._send(writer, stale)
+        self.assertEqual(b"", await asyncio.wait_for(reader.read(1), 3))
+        self.assertEqual(1, len(self.packets))
+        writer.close()
+        await writer.wait_closed()
+
+    async def test_v3_connection_cannot_change_session_identity(self) -> None:
+        reader, writer = await asyncio.open_connection("127.0.0.1", self.port)
+        hello = self._envelope(hello=wire.Hello(robot_id="robot", op_mode_name="Debugger"))
+        hello.protocol_version = 3
+        await self._send(writer, hello)
+        await self._wait_packets(1)
+        changed = self._envelope(heartbeat=wire.Heartbeat())
+        changed.protocol_version = 3
+        changed.session_id = uuid.uuid4().bytes
+        await self._send(writer, changed)
+        self.assertEqual(b"", await asyncio.wait_for(reader.read(1), 3))
+        self.assertEqual(1, len(self.packets))
         writer.close()
         await writer.wait_closed()
 

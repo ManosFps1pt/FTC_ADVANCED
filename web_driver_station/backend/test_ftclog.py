@@ -42,6 +42,17 @@ class FtcLogTests(unittest.TestCase):
             self.assertEqual([b"complete"], [record.protobuf_frame for record in iter_records(partial_path)])
             recorder.close_all()
 
+    def test_disconnect_preserves_partial_file_and_download_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = RawFtcLogRecorder(Path(directory))
+            session = str(uuid.uuid4())
+            partial = recorder.append(session, b"accepted-frame", 10)
+            self.assertEqual(partial, recorder.close_session(session, complete=False))
+            self.assertEqual([], recorder.list_sessions()[0]["logs"])
+            self.assertEqual([partial.name], recorder.list_sessions()[0]["partial_logs"])
+            self.assertEqual(partial, recorder.log_path(session, partial.name))
+            self.assertEqual([b"accepted-frame"], [r.protobuf_frame for r in iter_records(partial)])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -391,6 +391,14 @@ a proxy for whether the robot ran.
 
 ## 8. Safety and permission requirements
 
+The public-release v3 contract requires the **official Driver Station** to START
+the debugger, explicit selection of one robot session/tool on the laptop, browser
+control acquisition, and local arming with both bumpers + A on a physical gamepad.
+Both browser and robot leases expire after 500 ms; renewals run every 100 ms.
+Reconnect, tool replacement, blur, and STOP require fresh acquisition/arming.
+v2 recording playback grants no actuation authority. Release qualification and
+known remaining work are tracked in [the hardening guide](docs/RELEASE_HARDENING.md).
+
 - The FTC Driver Station is authoritative for lifecycle and emergency stop.
   The structured TCP channel is for typed, discrete debug commands and
   observability; its loss must never prevent the normal stop path.

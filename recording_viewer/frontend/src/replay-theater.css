@@ -1,0 +1,202 @@
+.replay-view-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .75rem;
+}
+
+.trace .trace-grid { fill: none; stroke: #426785; stroke-width: .6; }
+.trace .trace-cursor { stroke: #e6edf7; stroke-width: .8; stroke-dasharray: 3 3; }
+.trace svg text { fill: #c1d3e3; font-size: 9px; }
+
+#root:has(.replay-theater) > nav { display: none; }
+main.replay-theater {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  width: 100%;
+  height: 100dvh;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #04070a;
+}
+
+.theater-stage { position: relative; width: 100%; height: 100%; }
+.theater-stage > .replay-video {
+  position: absolute;
+  inset: 0;
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #04070a;
+  box-shadow: none;
+}
+.theater-stage .replay-video-header { display: none; }
+.theater-stage > .replay-video .video-stage {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  aspect-ratio: auto;
+  cursor: pointer;
+}
+
+.theater-header, .theater-controls {
+  position: absolute;
+  z-index: 2;
+  inset-inline: 0;
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  padding: .65rem clamp(.7rem, 2vw, 1.5rem);
+}
+.theater-header {
+  inset-block-start: 0;
+  justify-content: space-between;
+  background: linear-gradient(180deg, rgb(4 8 15 / .96), rgb(4 8 15 / .35));
+}
+.theater-header h1 { overflow: hidden; font-size: clamp(.88rem, 2vw, 1.35rem); text-overflow: ellipsis; white-space: nowrap; }
+.theater-header-actions, .theater-control-row { display: flex; align-items: center; gap: .4rem; }
+.theater-header-actions { flex-shrink: 0; }
+.theater-header button, .theater-settings summary, .theater-controls button {
+  padding: .5rem .72rem;
+  border: 1px solid #ffffff38;
+  border-radius: .45rem;
+  background: rgb(19 32 47 / .88);
+  font-size: .75rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.theater-header button:hover, .theater-settings summary:hover, .theater-controls button:hover { background: #284f73; }
+.theater-settings { position: relative; }
+.theater-settings summary { list-style: none; }
+.theater-settings summary::-webkit-details-marker { display: none; }
+.theater-settings-panel {
+  position: fixed;
+  top: 3.4rem;
+  right: clamp(.7rem, 2vw, 1.5rem);
+  width: min(20rem, calc(100vw - 1.5rem));
+  max-height: min(36rem, 68dvh);
+  overflow: auto;
+  padding: .8rem;
+  border: 1px solid #365775;
+  border-radius: .65rem;
+  background: #101f31;
+  box-shadow: 0 1rem 3rem #0008;
+}
+.theater-settings-panel fieldset { min-width: 0; margin: 0 0 .5rem; padding: .25rem .5rem; border: 1px solid #34546e; border-radius: .4rem; }
+.theater-settings-panel legend { padding: 0 .25rem; font-size: .8rem; font-weight: 700; }
+.theater-settings-panel label { display: flex; align-items: center; gap: .4rem; padding: .3rem 0; color: #e6edf7; font-size: .75rem; }
+.theater-settings-panel .signal-picker { padding: 0; }
+.theater-settings-panel input, .theater-controls input { accent-color: #6ac5ff; }
+.theater-export-result {
+  position: fixed;
+  top: 3.4rem;
+  right: clamp(.7rem, 2vw, 1.5rem);
+  max-width: min(24rem, calc(100vw - 1.5rem));
+  padding: .65rem .8rem;
+  border: 1px solid #365775;
+  border-radius: .55rem;
+  background: #101f31;
+  color: #e6edf7;
+  font-size: .8rem;
+}
+.theater-export-result a { color: #a9e1ff; }
+.theater-settings[open] .theater-settings-panel { z-index: 1; }
+
+.theater-overlays {
+  position: absolute;
+  inset: 3.9rem clamp(.7rem, 2vw, 1.5rem) 5.15rem;
+  display: flex;
+  justify-content: space-between;
+  gap: .55rem;
+  pointer-events: none;
+}
+.theater-rail { display: flex; flex-direction: column; gap: .45rem; min-width: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: #557b9c #0c1724; }
+.theater-rail > * { flex: none; pointer-events: auto; }
+.theater-left { width: clamp(13rem, 20vw, 20rem); }
+.theater-right { width: clamp(16rem, 24vw, 24rem); }
+.theater-overlays .panel { border-color: #6384a455; border-radius: .55rem; background: rgb(9 19 31 / .88); box-shadow: none; }
+.theater-lights { width: min(100%, 13rem); }
+.theater-lights > section { padding: .4rem; }
+.theater-lights .eyebrow, .theater-lights .rgb-light-panel-heading > span { display: none; }
+.theater-lights .rgb-light-swatch { flex-basis: 1rem; width: 1rem; height: 1rem; }
+.theater-graphs { margin-block-start: auto; }
+.theater-graphs:first-child { margin-block-start: 0; }
+.theater-graphs .traces { grid-template-rows: none; gap: .28rem; }
+.theater-graphs .trace { padding: .32rem .44rem .12rem; }
+.theater-graphs .trace > div { align-items: baseline; gap: .3rem; }
+.theater-graphs .trace strong { font-size: .72rem; }
+.theater-graphs .trace span { flex: 0 0 auto; font-size: .65rem; }
+.theater-graphs .trace svg { height: auto; min-height: 0; max-height: 4.15rem; }
+.theater-graphs .trace svg text { font-size: 11px; }
+.theater-graphs .empty { margin: 0; padding: .5rem; background: #101f31; border-radius: .45rem; font-size: .78rem; }
+
+.theater-motors { padding: .4rem .55rem; }
+.theater-motors > header { display: flex; justify-content: space-between; align-items: center; min-height: 1.55rem; }
+.theater-motors h2, .theater-map h2 { margin: 0; font-size: .78rem; }
+.motor-page { display: flex; align-items: center; gap: .25rem; color: #bad0e3; font: .62rem ui-monospace, monospace; }
+.motor-page button { padding: .05rem .4rem; border-radius: .3rem; background: #25435d; font-size: .85rem; }
+.theater-motors table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.theater-motors .motor-name-column { width: 40%; }
+.theater-motors th, .theater-motors td { overflow: hidden; padding: .34rem .18rem; border-bottom: 1px solid #30475d; text-overflow: ellipsis; white-space: nowrap; }
+.theater-motors tbody tr:last-child > * { border-bottom: 0; }
+.theater-motors th:first-child { text-align: left; }
+.theater-motors thead th { color: #a1bbd0; font-size: .62rem; }
+.theater-motors tbody th { font-size: .68rem; }
+.theater-motors td { color: #dcefff; background: var(--current-surface, transparent); text-align: center; font: .67rem ui-monospace, monospace; }
+
+.theater-right-bottom {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 7.4rem), 1fr));
+  align-items: end;
+  gap: .4rem;
+  margin-block-start: auto;
+  pointer-events: none;
+}
+.theater-right-bottom > * { min-width: 0; pointer-events: auto; }
+.theater-right-bottom:empty { display: none; }
+.theater-gamepads { display: grid; gap: .3rem; }
+.theater-gamepads .controller { padding: .36rem .42rem; }
+.theater-gamepads .controller small { font-size: .52rem; }
+.theater-gamepads .controller-body { margin-top: .26rem; gap: .18rem; }
+.theater-gamepads .controller-row { margin-top: .24rem; }
+.theater-gamepads .stick { width: 1.68rem; height: 1.68rem; }
+.theater-map { margin: 0; padding: .4rem; }
+.theater-map .field-map-layout { grid-template-columns: minmax(0, 1fr); justify-items: center; gap: .18rem; }
+.theater-map .field-map-canvas { width: min(100%, 9rem, 18dvh); }
+.theater-map-coordinates { color: #c9e5f7; font: .59rem ui-monospace, monospace; white-space: nowrap; }
+
+.theater-controls {
+  inset-block-end: 0;
+  display: grid;
+  gap: .45rem;
+  background: linear-gradient(0deg, #08101c, rgb(8 16 28 / .82));
+}
+.theater-controls input { width: 100%; margin: 0; cursor: pointer; }
+.theater-control-row > span { margin-inline-start: .4rem; color: #dceeff; font: .78rem ui-monospace, monospace; }
+.theater-controls .theater-play { min-width: 4.2rem; background: #205a88; }
+.theater-fullscreen { margin-inline-start: auto; }
+
+@media (max-width: 680px) {
+  .replay-view-tools { justify-content: flex-start; }
+  .theater-left, .theater-right { flex: 1; }
+  .theater-motors tbody th, .theater-motors td { font-size: .59rem; }
+  .theater-motors th, .theater-motors td { padding-inline: .08rem; }
+  .theater-gamepads .controller small { display: none; }
+  .theater-map-coordinates { font-size: .5rem; }
+  .theater-graphs .trace strong, .theater-graphs .trace span { font-size: .64rem; }
+  .theater-header button, .theater-settings summary, .theater-controls button { padding-inline: .44rem; }
+  .theater-control-row > span { margin-inline-start: 0; font-size: .68rem; }
+}
+
+@media (max-width: 600px) and (orientation: portrait) {
+  .theater-stage > .replay-video { inset-block-end: 45%; }
+  .theater-overlays { inset-block-start: 55%; }
+  .theater-rail { pointer-events: auto; }
+}

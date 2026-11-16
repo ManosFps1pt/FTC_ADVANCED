@@ -9,7 +9,7 @@ import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 import com.qualcomm.robotcore.util.Range;
 
-import org.firstinspires.ftc.teamcode.data.StructuredRobotDataClient;
+import io.github.manosfps1pt.ftclogger.StructuredRobotDataClient;
 
 
 /**
@@ -75,6 +75,7 @@ public class TwoMotorDrivetrain extends OpMode {
 
     @Override
     public void start() {
+        if (dataClient != null) dataClient.markStarted();
         runtime.reset();
         leftCommandedPower = 0.0;
         rightCommandedPower = 0.0;

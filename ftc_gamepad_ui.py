@@ -37,6 +37,7 @@ class GamepadWindow:
             raise RuntimeError("CustomTkinter is not installed; run: pip install customtkinter")
 
         self._client = client
+        self._lease_id: str | None = None
         self._user = user
         self._stop_on_close = stop_on_close
         self._buttons = GamepadButton(0)
@@ -45,7 +46,7 @@ class GamepadWindow:
         self._root.geometry("780x570")
         self._root.minsize(700, 500)
         self._root.protocol("WM_DELETE_WINDOW", self._close)
-        self._root.bind("<FocusOut>", lambda _event: self.release_all())
+        self._root.bind("<FocusOut>", lambda _event: self._root.after_idle(self._check_focus))
 
         self._left_x = ctk.DoubleVar(value=0.0)
         self._left_y = ctk.DoubleVar(value=0.0)
@@ -55,6 +56,7 @@ class GamepadWindow:
         self._right_trigger = ctk.DoubleVar(value=0.0)
         self._build()
         self._publish()
+        self._root.after(100, self._renew_control)
 
     def run(self) -> None:
         self._root.mainloop()
@@ -76,7 +78,9 @@ class GamepadWindow:
             command=self._switch_controller,
             width=190,
         )
-        self._switch_button.grid(row=1, column=0, columnspan=3, pady=(0, 6))
+        self._switch_button.grid(row=1, column=0, pady=(0, 6))
+        ctk.CTkButton(root, text="Acquire control", command=self._acquire_control).grid(row=1, column=1)
+        ctk.CTkButton(root, text="Release control", command=self._release_control).grid(row=1, column=2)
 
         left = ctk.CTkFrame(root)
         center = ctk.CTkFrame(root)
@@ -180,18 +184,50 @@ class GamepadWindow:
         self._publish()
 
     def _publish(self) -> None:
-        self._client.set_gamepad_input(
-            GamepadInput(
-                user=self._user,
-                left_stick_x=self._left_x.get(),
-                left_stick_y=self._left_y.get(),
-                right_stick_x=self._right_x.get(),
-                right_stick_y=self._right_y.get(),
-                left_trigger=self._left_trigger.get(),
-                right_trigger=self._right_trigger.get(),
-                buttons=self._buttons,
+        if self._lease_id is None:
+            return
+        try:
+            self._client.set_gamepad_input(
+                GamepadInput(
+                    user=self._user,
+                    left_stick_x=self._left_x.get(),
+                    left_stick_y=self._left_y.get(),
+                    right_stick_x=self._right_x.get(),
+                    right_stick_y=self._right_y.get(),
+                    left_trigger=self._left_trigger.get(),
+                    right_trigger=self._right_trigger.get(),
+                    buttons=self._buttons,
+                ), self._lease_id
             )
-        )
+        except ControlHubError:
+            self._release_control()
+            self._title.configure(text="Control expired. Acquire control to continue.")
+
+    def _acquire_control(self) -> None:
+        try:
+            self._lease_id = self._client.acquire_control()
+            self.release_all()
+            self._title.configure(text="Control acquired")
+        except ControlHubError as error:
+            self._title.configure(text=str(error))
+
+    def _release_control(self) -> None:
+        self._client.release_control()
+        self._lease_id = None
+        self.release_all()
+
+    def _check_focus(self) -> None:
+        if self._root.focus_displayof() is None:
+            self._release_control()
+
+    def _renew_control(self) -> None:
+        if self._lease_id is not None:
+            try:
+                self._client.renew_control(self._lease_id)
+            except ControlHubError:
+                self._release_control()
+                self._title.configure(text="Control expired. Acquire control to continue.")
+        self._root.after(100, self._renew_control)
 
     def release_all(self) -> None:
         """Immediately place every control in its neutral state."""
@@ -226,7 +262,7 @@ class GamepadWindow:
         return f"Switch to Gamepad {next_user}"
 
     def _close(self) -> None:
-        self.release_all()
+        self._release_control()
         # Allow the 40 ms Robocol loop to transmit the released state once.
         self._root.after(80, self._shutdown)
 

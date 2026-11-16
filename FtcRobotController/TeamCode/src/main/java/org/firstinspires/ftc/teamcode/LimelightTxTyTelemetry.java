@@ -7,7 +7,7 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
-import org.firstinspires.ftc.teamcode.data.StructuredRobotDataClient;
+import io.github.manosfps1pt.ftclogger.StructuredRobotDataClient;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -39,6 +39,7 @@ public final class LimelightTxTyTelemetry extends LinearOpMode {
             return;
         }
 
+        try {
         dataClient = new StructuredRobotDataClient(
                 StructuredRobotDataClient.DEFAULT_DISCOVERY_PORT,
                 StructuredRobotDataClient.DEFAULT_PORT,
@@ -58,8 +59,8 @@ public final class LimelightTxTyTelemetry extends LinearOpMode {
 
         waitForStart();
         runtime.reset();
-
-        try {
+        if (isStopRequested()) return;
+        dataClient.markStarted();
             while (opModeIsActive()) {
                 LLResult result = limelight.getLatestResult();
                 boolean validTarget = result != null && result.isValid();
@@ -93,9 +94,10 @@ public final class LimelightTxTyTelemetry extends LinearOpMode {
                 idle();
             }
         } finally {
-            limelight.stop();
-            dataClient.close();
-            dataClient = null;
+            try { limelight.stop(); } finally {
+                if (dataClient != null) dataClient.close();
+                dataClient = null;
+            }
         }
     }
 
@@ -109,9 +111,9 @@ public final class LimelightTxTyTelemetry extends LinearOpMode {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("opmode.runtimeSeconds", runtimeSeconds);
         values.put("vision.limelight.targetValid", validTarget);
-        values.put("vision.limelight.txDegrees", tx);
-        values.put("vision.limelight.tyDegrees", ty);
-        values.put("vision.limelight.latencyMs", latencyMs);
+        values.put("vision.limelight.txDegrees", validTarget ? tx : null);
+        values.put("vision.limelight.tyDegrees", validTarget ? ty : null);
+        values.put("vision.limelight.latencyMs", validTarget ? latencyMs : null);
         values.put("vision.limelight.pipelineIndex", status.getPipelineIndex());
         values.put("vision.limelight.fps", status.getFps());
         return values;

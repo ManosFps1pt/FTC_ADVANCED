@@ -20,6 +20,10 @@ graphify-out/
 
 # Local test recordings and other generated artifacts
 artifacts/
+.playwright-cli/
+output/playwright/
+web_driver_station/frontend/test-results/
+web_driver_station/frontend/playwright-report/
 
 # Android Studio generated files and folders
 captures/

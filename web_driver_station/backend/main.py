@@ -10,12 +10,14 @@ from __future__ import annotations
 import asyncio
 import os
 import platform
+import secrets
 import re
 import subprocess
 import sys
 import threading
 import time
 import uuid
+from math import isfinite
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Mapping
 from pathlib import Path
@@ -41,10 +43,12 @@ from .robot_data_tcp_server import DEFAULT_HOST, DEFAULT_PORT, ReceivedRobotPack
 from .telemetry_store import TelemetryProtocolError, TelemetryStore, TelemetryUpdate
 from .protocol import robot_data_pb2 as wire
 from .debug_commands import build_debug_command_request, command_request_id
-from .ftclog import FtcLogError, RawFtcLogRecorder
-from .debugger_results import DebuggerResults
+from .ftclog import FtcLogError, RawFtcLogRecorder, is_closed_partial
+from .debugger_results import DebuggerResults, atomic_json
 from .debugger_api import install_debugger_controls
 from .incidents import IncidentError, IncidentRecorder
+from .broadcast import BrowserBroadcast
+from .recording_metadata import RECORDING_METADATA_FILE, RecordingMetadata
 from .recording_uploader import RecordingUploadError, RecordingUploader, UploadSettings
 from .video_recorder import CameraRecordingConfig, VideoRecorder, VideoRecorderError
 from .adb_camera import AdbCameraError, AdbCameraService
@@ -60,6 +64,7 @@ class ConnectRequest(BaseModel):
 
 
 class GamepadState(BaseModel):
+    lease_id: str | None = None
     left_stick_x: float = Field(default=0.0, ge=-1, le=1)
     left_stick_y: float = Field(default=0.0, ge=-1, le=1)
     right_stick_x: float = Field(default=0.0, ge=-1, le=1)
@@ -67,6 +72,10 @@ class GamepadState(BaseModel):
     left_trigger: float = Field(default=0.0, ge=0, le=1)
     right_trigger: float = Field(default=0.0, ge=0, le=1)
     buttons: int = Field(default=0, ge=0, le=0x3FFFF)
+
+
+class ControlLeaseRequest(BaseModel):
+    lease_id: str = Field(min_length=16, max_length=100)
 
 
 class OpModeRequest(BaseModel):
@@ -97,19 +106,27 @@ class VideoRecordingRequest(BaseModel):
 
 
 class DebugSelectHttpRequest(BaseModel):
+    lease_id: str | None = None
     node_id: str = Field(min_length=1, max_length=160)
     manifest_revision: int = Field(default=1, ge=1)
 
 
+class DebugTargetRequest(BaseModel):
+    session_id: str
+
+
 class DebugParameterHttpRequest(BaseModel):
+    lease_id: str | None = None
     node_id: str = Field(min_length=1, max_length=160)
     tool_instance_id: str = Field(min_length=1, max_length=80)
     parameter_id: str = Field(min_length=1, max_length=160)
-    value: float = Field(ge=-1.0, le=1.0)
+    value: float = Field(allow_inf_nan=False)
     ttl_ms: int = Field(default=500, ge=1, le=10_000)
+    request_id: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class DebugCommandHttpRequest(BaseModel):
+    lease_id: str | None = None
     node_id: str = Field(min_length=1, max_length=160)
     tool_instance_id: str = Field(min_length=1, max_length=80)
     command_id: str = Field(min_length=1, max_length=160)
@@ -125,7 +142,7 @@ class TelemetryCaptureRequest(BaseModel):
     enabled: bool
 
 
-class RecordingUploadRequest(BaseModel):
+class RecordingUploadRequest(RecordingMetadata):
     keep_local: bool = False
 
 
@@ -260,6 +277,7 @@ class DriverStationService:
 
     def stop_opmode(self) -> dict[str, Any]:
         client = self._require_client()
+        client.release_control()
         client.clear_gamepad_input(1)
         client.clear_gamepad_input(2)
         client.stop_opmode()
@@ -275,6 +293,8 @@ class DriverStationService:
 
     def set_gamepad(self, user: int, state: GamepadState) -> None:
         client = self._require_client()
+        if self.status()["robot_state"] not in ("INIT", "RUNNING"):
+            raise ControlHubError("Initialize an OpMode before sending gamepad input")
         client.set_gamepad_input(
             GamepadInput(
                 user=user,
@@ -285,7 +305,7 @@ class DriverStationService:
                 left_trigger=state.left_trigger,
                 right_trigger=state.right_trigger,
                 buttons=state.buttons,
-            )
+            ), lease_id=state.lease_id
         )
 
     def clear_gamepad(self, user: int) -> None:
@@ -477,6 +497,12 @@ class RobotDataService:
         self._active_peer: tuple[str, int] | None = None
         self._active_session_id: bytes | None = None
         self._active_connection_id: bytes | None = None
+        self._peer_states: dict[tuple[str, int] | None, dict[str, Any]] = {}
+        self._selected_session: str | None = None
+        self._browser_broadcast = BrowserBroadcast()
+        self._debug_lease = None
+        self._debug_lease_deadline = 0.0
+        self._blocked_robot_lease = ""
         self._debug_sequence = 1
         recordings_root = Path(
             os.getenv("ROBOT_DATA_RECORDINGS_DIR", str(Path(__file__).resolve().parents[1] / "recordings"))
@@ -531,6 +557,7 @@ class RobotDataService:
         await self._prepare_upload_decision(session_id)
 
     async def close(self) -> None:
+        await self._browser_broadcast.close()
         await self._server.close()
         if self._capture_override_session_id is not None:
             await asyncio.to_thread(self._incident_recorder.close_session, self._capture_override_session_id)
@@ -542,7 +569,7 @@ class RobotDataService:
     def status(self) -> dict[str, Any]:
         return {
             "listening": bool(self._server.listening_addresses),
-            "connected": bool(self._peers),
+            "connected": any(time.perf_counter_ns()-state["received_ns"] < 2_000_000_000 for state in self._peer_states.values()),
             "connection_count": len(self._peers),
             "peers": [{"host": host, "port": port} for host, port in sorted(self._peers)],
             "latest_packet": self._latest_packet,
@@ -583,17 +610,84 @@ class RobotDataService:
 
     def debug_status(self) -> dict[str, Any]:
         return {
-            "connected": bool(self._peers),
+            "connected": self._debug_fresh(),
+            "selected_session": self._selected_session,
+            "sessions": [{"session_id": state["session_id"], "robot_id": state["robot_id"],
+                          "opmode": state["opmode"], "protocol": state["protocol"]}
+                         for state in self._peer_states.values()],
             "manifest": self._debug_manifest,
             "tool_ready": self._debug_ready,
             "tool_state": self._debug_tool_state,
-            "safety": self._debug_safety,
+            "safety": {key: value for key, value in (self._debug_safety or {}).items() if key != "controlLeaseId"},
+            "control_owned": bool(self._debug_lease and time.monotonic()<self._debug_lease_deadline),
             "last_event": self._debug_last_event,
         }
+
+    def _debug_fresh(self) -> bool:
+        state = self._peer_states.get(self._active_peer)
+        return bool(state and time.perf_counter_ns() - state["received_ns"] < 2_000_000_000)
+
+    def select_debug_target(self, session_id: str) -> None:
+        matches = [(peer, state) for peer, state in self._peer_states.items() if state["session_id"] == session_id]
+        if len(matches) != 1:
+            raise ValueError("Choose exactly one connected robot session")
+        peer, state = matches[0]
+        if self._debug_lease and time.monotonic()<self._debug_lease_deadline:
+            raise ValueError("Release control before switching robot sessions")
+        self._debug_lease = None
+        self._selected_session = session_id
+        if self._telemetry.has_session(session_id):
+            self._telemetry.select_session(session_id)
+        self._active_peer = peer
+        self._active_session_id = state["session_bytes"]
+        self._active_connection_id = state["connection_bytes"]
+        self._debug_sequence = state.get("outgoing_sequence", 1)
+        self._debug_manifest = state.get("debug_manifest")
+        self._debug_ready = state.get("debug_tool_ready")
+        self._debug_tool_state = state.get("debug_tool_state")
+        self._debug_safety = state.get("debug_safety_state")
+        self._debug_last_event = None
+
+    def acquire_debug_control(self) -> str:
+        if not self._debug_fresh() or self._peer_states[self._active_peer]["protocol"] != 3:
+            raise RuntimeError("Select a fresh protocol v3 session first")
+        if self._debug_lease and time.monotonic()<self._debug_lease_deadline:
+            raise RuntimeError("Another browser owns this session")
+        self._debug_lease = secrets.token_urlsafe(24)
+        self._blocked_robot_lease = (self._debug_safety or {}).get("controlLeaseId", "")
+        self._debug_lease_deadline = time.monotonic()+0.5
+        return self._debug_lease
+
+    def require_debug_control(self, token: str | None) -> None:
+        if not self._debug_fresh() or time.monotonic()>=self._debug_lease_deadline:
+            self._debug_lease = None
+        if not token or token != self._debug_lease:
+            raise RuntimeError("Debugger control lease expired; explicitly reacquire control")
+
+    async def renew_debug_control(self, token: str) -> None:
+        self.require_debug_control(token)
+        self._debug_lease_deadline = time.monotonic()+0.5
+        safety = self._debug_safety or {}
+        if safety.get("armed") and safety.get("controlLeaseId") != self._blocked_robot_lease and self._debug_ready:
+            envelope=self._debug_envelope(lease_id=token, debug_command_request=wire.DebugCommandRequest(
+                request_id=str(uuid.uuid4()), node_id=self._debug_ready["nodeId"],
+                tool_instance_id=self._debug_ready["toolInstanceId"], command_id="control.keepalive", ttl_ms=500))
+            await self._server.send(envelope, self._active_peer)
+
+    async def arm_debug_control(self, token: str) -> None:
+        self.require_debug_control(token)
+        ready = self._debug_ready or {}
+        if not any(c.get("id") == "control.arm" for c in ready.get("commands", [])):
+            raise RuntimeError("Install the updated BIOBUZZ APK to arm from the laptop")
+        envelope = self._debug_envelope(lease_id=token, debug_command_request=wire.DebugCommandRequest(
+            request_id=str(uuid.uuid4()), node_id=ready["nodeId"],
+            tool_instance_id=ready["toolInstanceId"], command_id="control.arm", ttl_ms=500))
+        await self._server.send(envelope, self._active_peer)
 
     async def send_debug_select(self, request: DebugSelectHttpRequest) -> dict[str, str]:
         request_id = str(uuid.uuid4())
         envelope = self._debug_envelope(
+            lease_id=request.lease_id,
             debug_select_request=wire.DebugSelectRequest(
                 request_id=request_id,
                 manifest_revision=request.manifest_revision,
@@ -604,8 +698,18 @@ class RobotDataService:
         return {"request_id": request_id, "node_id": request.node_id}
 
     async def send_debug_parameter(self, request: DebugParameterHttpRequest) -> dict[str, str]:
-        request_id = str(uuid.uuid4())
+        ready = self._debug_ready or {}
+        if (ready.get("nodeId") != request.node_id or ready.get("toolInstanceId") != request.tool_instance_id):
+            raise RuntimeError("debug parameter targets a different tool instance")
+        parameter = next((item for item in ready.get("parameters", []) if item.get("id") == request.parameter_id), None)
+        if parameter is None or not parameter.get("writable"):
+            raise ValueError(f"parameter is not writable: {request.parameter_id}")
+        if not isfinite(request.value) or not parameter["min"] <= request.value <= parameter["max"]:
+            raise ValueError(f"value is outside the registered bounds for {request.parameter_id}")
+
+        request_id = command_request_id(request.request_id)
         envelope = self._debug_envelope(
+            lease_id=request.lease_id,
             debug_parameter_set_request=wire.DebugParameterSetRequest(
                 request_id=request_id,
                 node_id=request.node_id,
@@ -648,6 +752,7 @@ class RobotDataService:
         ]
         request_id = command_request_id(request.request_id)
         envelope = self._debug_envelope(
+            lease_id=request.lease_id,
             debug_command_request=build_debug_command_request(
                 request_id=request_id,
                 node_id=request.node_id,
@@ -691,11 +796,28 @@ class RobotDataService:
             raise ValueError(f"argument {argument_id} has unsupported type: {value_type or 'unspecified'}")
         return result
 
-    def _debug_envelope(self, **body: Any) -> wire.Envelope:
+    def _debug_envelope(self, lease_id: str | None = None, **body: Any) -> wire.Envelope:
         if self._active_session_id is None or self._active_connection_id is None:
             raise RuntimeError("robot debug TCP connection is not active")
+        state = self._peer_states.get(self._active_peer)
+        if not state or state["protocol"] != 3 or not self._debug_fresh():
+            raise RuntimeError("Select a fresh protocol v3 robot session; v2 is observation-only")
+        stop = body.get("debug_command_request")
+        harmless = ("debug_select_request" in body or "debug_run_ack" in body
+                    or (stop is not None and stop.command_id in ("stop", "motor.stop", "benchmark.abort")))
+        safety = self._debug_safety or {}
+        arming = stop is not None and stop.command_id == "control.arm"
+        if not harmless:
+            self.require_debug_control(lease_id)
+        if "debug_select_request" in body and self._debug_lease and time.monotonic()<self._debug_lease_deadline:
+            self.require_debug_control(lease_id)
+        if not harmless and not arming and not safety.get("armed"):
+            raise RuntimeError("Click Arm selected motor before running the test")
+        if not harmless and not arming and safety.get("controlLeaseId", "") == self._blocked_robot_lease:
+            raise RuntimeError("Arm the tool again after acquiring this browser lease")
         envelope = wire.Envelope(
-            protocol_version=2,
+            protocol_version=3,
+            control_lease_id=safety.get("controlLeaseId", ""),
             session_id=self._active_session_id,
             connection_id=self._active_connection_id,
             connection_sequence=self._debug_sequence,
@@ -703,6 +825,7 @@ class RobotDataService:
             **body,
         )
         self._debug_sequence += 1
+        state["outgoing_sequence"] = self._debug_sequence
         return envelope
 
     def telemetry_state(self) -> dict[str, Any]:
@@ -729,11 +852,36 @@ class RobotDataService:
         }
 
     async def set_capture_override(self, enabled: bool) -> dict[str, Any]:
-        if self._capture_override_session_id is None or self._active_peer is None:
+        owners = [state for state in self._peer_states.values()
+                  if state["session_id"] == self._capture_override_session_id
+                  and time.perf_counter_ns() - state["received_ns"] < 2_000_000_000]
+        if len(owners) != 1:
             raise RuntimeError("Telemetry capture requires an active robot-data session")
         self._capture_override_enabled = enabled
         await self._broadcast_telemetry(TelemetryUpdate("telemetry_capture", self.capture_status()))
         return self.capture_status()
+
+    async def select_capture_session(self, session_id: str) -> None:
+        """Bind the shared camera only to the chosen session, never the last packet."""
+        if session_id == self._capture_override_session_id:
+            return
+        previous = self._capture_override_session_id
+        self._capture_override_enabled = False
+        self._capture_override_session_id = None
+        if previous is not None:
+            await asyncio.to_thread(self._incident_recorder.close_session, previous)
+            await self._stop_capture_for_session(previous)
+        if session_id in self._benchmark_sessions:
+            return
+        self._capture_override_session_id = session_id
+        try:
+            if self._capture_start_callback is not None:
+                await asyncio.to_thread(self._capture_start_callback, session_id)
+            if self._session_bound_callback is not None:
+                await asyncio.to_thread(self._session_bound_callback, session_id)
+        except (CameraRecordingError, OSError):
+            # Raw telemetry remains usable when the optional camera is unavailable.
+            pass
 
     def recording_sessions(self) -> list[dict[str, object]]:
         debugger_ids = {r["runId"] for r in self._debug_results.list()}
@@ -767,8 +915,6 @@ class RobotDataService:
             await asyncio.to_thread(self._raw_recorder.append, session_id, protobuf_frame, received_monotonic_ns)
             if peer is not None:
                 self._connection_sessions[peer] = session_id
-            if self._session_bound_callback is not None:
-                self._session_bound_callback(session_id)
         except FtcLogError:
             # The receiver will still validate and expose its live state; the
             # raw recorder status retains the disk failure for the operator.
@@ -781,9 +927,15 @@ class RobotDataService:
             "received_monotonic_ns": packet.received_monotonic_ns,
             "received_at_ms": int(time.time() * 1000),
         }
-        self._active_peer = packet.peer
-        self._active_session_id = packet.envelope.session_id
-        self._active_connection_id = packet.envelope.connection_id
+        peer_state = self._peer_states.get(packet.peer)
+        if packet.envelope.HasField("hello"):
+            peer_state = {"session_id": str(uuid.UUID(bytes=packet.envelope.session_id)),
+                          "session_bytes": packet.envelope.session_id, "connection_bytes": packet.envelope.connection_id,
+                          "protocol": packet.envelope.protocol_version, "robot_id": packet.envelope.hello.robot_id,
+                          "opmode": packet.envelope.hello.op_mode_name}
+            self._peer_states[packet.peer] = peer_state
+        if peer_state is not None:
+            peer_state["received_ns"] = packet.received_monotonic_ns
         dataset_ack = None
         if packet.envelope.WhichOneof("body") in ("debug_run_header", "debug_run_chunk", "debug_run_end"):
             try:
@@ -796,20 +948,6 @@ class RobotDataService:
         is_hello = packet.envelope.WhichOneof("body") == "hello"
         resumed = is_hello and self._telemetry.has_session(packet.payloads[0].get("sessionId"))
         session_id = packet.payloads[0].get("sessionId")
-        if is_hello and isinstance(session_id, str) and session_id != self._capture_override_session_id:
-            if self._capture_override_session_id is not None:
-                await asyncio.to_thread(self._incident_recorder.close_session, self._capture_override_session_id)
-            self._capture_override_session_id = session_id
-            self._capture_override_enabled = False
-            if self._capture_start_callback is not None:
-                try:
-                    # TCP can connect before the operator presses Init. Start
-                    # the optional camera sidecar here as a fallback and bind
-                    # it immediately to this raw-telemetry session.
-                    await asyncio.to_thread(self._capture_start_callback, session_id)
-                except (CameraRecordingError, OSError):
-                    # A missing camera must never reject a robot-data hello.
-                    pass
         updates: list[TelemetryUpdate] = []
         structured_accepted = True
         for payload in packet.payloads:
@@ -838,12 +976,18 @@ class RobotDataService:
                     # optional evidence index cannot be written.
                     pass
         for update in updates:
-            await self._broadcast_telemetry(update)
+            current = self._telemetry.status().get("activeSession")
+            if current and current["sessionId"] == session_id:
+                await self._broadcast_telemetry(update)
         for payload in packet.payloads:
             if str(payload.get("type", "")).startswith("debug_"):
                 if payload.get("type") in ("debug_run_header", "debug_run_chunk", "debug_run_end"):
                     continue
                 data = dict(payload.get("data", {}))
+                if peer_state is not None:
+                    peer_state[str(payload.get("type"))] = data
+                if packet.peer != self._active_peer or self._selected_session is None:
+                    continue
                 if payload.get("type") == "debug_run_status":
                     pending = self._debug_results.pending.get(data.get("runId"))
                     if pending is not None:
@@ -867,9 +1011,30 @@ class RobotDataService:
         # debugger page without waiting for a later telemetry packet.
         await self._broadcast_status()
         if structured_accepted and is_hello:
+            if isinstance(session_id, str) and (
+                self._selected_session == session_id or
+                (self._selected_session is None and self._capture_override_session_id is None)
+            ):
+                await self.select_capture_session(session_id)
             return self._hello_ack(packet.envelope, resumed=resumed)
+        if packet.envelope.HasField("heartbeat") and peer_state is not None:
+            sequence = peer_state.get("outgoing_sequence", 1)
+            peer_state["outgoing_sequence"] = sequence + 1
+            if packet.peer == self._active_peer:
+                self._debug_sequence = sequence + 1
+            return wire.Envelope(protocol_version=packet.envelope.protocol_version,
+                                 session_id=packet.envelope.session_id, connection_id=packet.envelope.connection_id,
+                                 connection_sequence=sequence, heartbeat=wire.Heartbeat())
         if dataset_ack is not None:
-            return self._debug_envelope(debug_run_ack=dataset_ack)
+            if peer_state is None:
+                return None
+            sequence = peer_state.get("outgoing_sequence", 1)
+            peer_state["outgoing_sequence"] = sequence + 1
+            if packet.peer == self._active_peer:
+                self._debug_sequence = sequence + 1
+            return wire.Envelope(protocol_version=packet.envelope.protocol_version,
+                                 session_id=packet.envelope.session_id, connection_id=packet.envelope.connection_id,
+                                 connection_sequence=sequence, debug_run_ack=dataset_ack)
         if any(payload.get("type") == "session_end" for payload in packet.payloads) and isinstance(session_id, str):
             await self._finalize_recording(session_id)
             await self._stop_capture_for_session(session_id)
@@ -901,7 +1066,7 @@ class RobotDataService:
         """Accept a structured session before it sends its catalog and samples."""
 
         return wire.Envelope(
-            protocol_version=2,
+            protocol_version=request.protocol_version,
             session_id=request.session_id,
             connection_id=request.connection_id,
             connection_sequence=0,
@@ -920,11 +1085,16 @@ class RobotDataService:
                 self._peers.add(peer)
             else:
                 self._peers.discard(peer)
+                departed = self._peer_states.pop(peer, None)
+                if departed is not None:
+                    self._benchmark_sessions.discard(departed["session_id"])
                 if self._active_peer == peer:
+                    self._selected_session = None
                     self._debug_results.disconnected()
                     self._active_peer = None
                     self._active_session_id = None
                     self._active_connection_id = None
+                    self._debug_lease = None
                     self._debug_manifest = None
                     self._debug_ready = None
                     self._debug_tool_state = None
@@ -933,7 +1103,7 @@ class RobotDataService:
                 connection_id = self._connection_ids.pop(peer, None)
                 session_id = self._connection_sessions.pop(peer, None)
                 if session_id is not None:
-                    await self._finalize_recording(session_id)
+                    await self._finalize_recording(session_id, complete=False)
                     await self._stop_capture_for_session(session_id)
                 for update in self._telemetry.disconnect_connection(connection_id):
                     await self._broadcast_telemetry(update)
@@ -953,17 +1123,18 @@ class RobotDataService:
             # stopped a second time.
             pass
 
-    async def _finalize_recording(self, session_id: str) -> None:
+    async def _finalize_recording(self, session_id: str, *, complete: bool = True) -> None:
         """Finalize telemetry, then wait for the operator's upload decision."""
 
         await asyncio.to_thread(self._incident_recorder.close_session, session_id)
         if session_id == self._capture_override_session_id:
             self._capture_override_enabled = False
+            self._capture_override_session_id = None
         try:
-            final_path = await asyncio.to_thread(self._raw_recorder.close_session, session_id)
+            final_path = await asyncio.to_thread(self._raw_recorder.close_session, session_id, complete=complete)
         except FtcLogError:
             return
-        if final_path is None:
+        if final_path is None or (final_path.name.endswith(".partial") and not is_closed_partial(final_path)):
             return
         self._raw_finalized.add(session_id)
         await self._prepare_upload_decision(session_id)
@@ -971,6 +1142,11 @@ class RobotDataService:
     async def _prepare_upload_decision(self, session_id: str) -> None:
         """Expose a finalized recording for an explicit upload or discard choice."""
         if session_id not in self._raw_finalized:
+            return
+        current = self._upload_states.get(session_id, {})
+        if current.get("state") in {
+            "uploading", "retrying", "complete", "deleting", "deleted", "discarded", "local_deleted",
+        } or "metadata" in current:
             return
         if session_id in self._video_errors:
             self._upload_states[session_id] = {"state": "error", "detail": self._video_errors[session_id]}
@@ -990,16 +1166,20 @@ class RobotDataService:
             }
             await self._broadcast_status()
             return
-        current = self._upload_states.get(session_id, {})
-        if current.get("state") in {"ready_to_upload", "uploading", "complete"}:
+        if current.get("state") == "ready_to_upload":
             return
+        interrupted = any(self._raw_recorder.session_path(session_id).glob("raw/*.ftclog.partial"))
         self._upload_states[session_id] = {
             "state": "ready_to_upload",
-            "detail": "Recording is ready. Choose whether to upload it or discard it.",
+            "detail": ("Recording was interrupted; captured data is preserved and can be uploaded. "
+                       if interrupted else "Recording is ready. ")
+                      + "Choose whether to upload it or discard it.",
         }
         await self._broadcast_status()
 
-    async def upload_recording(self, session_id: str, *, keep_local: bool = False) -> dict[str, Any]:
+    async def upload_recording(
+        self, session_id: str, *, metadata: RecordingMetadata, keep_local: bool = False
+    ) -> dict[str, Any]:
         if self._recording_uploader is None:
             raise RecordingUploadError("Recording upload is not configured on this laptop")
         current = self._upload_states.get(session_id)
@@ -1007,13 +1187,10 @@ class RobotDataService:
             raise RecordingUploadError("This recording is not ready to upload")
         if not self._video_ready_checker(session_id):
             raise RecordingUploadError("Video is still finalizing")
-        await self._begin_upload(session_id, keep_local=keep_local)
-        return {"session_id": session_id, "state": "uploading"}
-
-    async def _begin_upload(self, session_id: str, *, keep_local: bool = True) -> None:
-        if self._recording_uploader is None:
-            raise RecordingUploadError("Recording upload is not configured on this laptop")
         recording_directory = self._raw_recorder.session_path(session_id)
+        # A retry must transfer the same bytes as the original upload. The SFTP
+        # uploader resumes staged files by size and may have already published the session.
+        notes = current.get("metadata") or {"title": metadata.title, "description": metadata.description}
         self._upload_states[session_id] = {"state": "uploading", "detail": "Upload started"}
         await self._broadcast_status()
         loop = asyncio.get_running_loop()
@@ -1028,6 +1205,15 @@ class RobotDataService:
             )
 
         async def upload() -> None:
+            try:
+                await asyncio.to_thread(atomic_json, recording_directory / RECORDING_METADATA_FILE, notes)
+            except OSError as error:
+                self._upload_states[session_id] = {
+                    "state": "error", "detail": f"Could not save recording details: {error}", "metadata": notes,
+                }
+                await self._broadcast_status()
+                return
+
             attempt = 0
             while True:
                 try:
@@ -1045,6 +1231,7 @@ class RobotDataService:
                                 "detail": f"Uploaded to server, but local cleanup failed: {error}",
                                 "uploadedFiles": result.uploaded_files,
                                 "skippedFiles": result.skipped_files,
+                                "metadata": notes,
                             }
                         else:
                             self._upload_states[session_id] = {
@@ -1062,12 +1249,12 @@ class RobotDataService:
                         }
                     await self._broadcast_status()
                     return
-                except RecordingUploadError as error:
+                except (RecordingUploadError, OSError) as error:
                     if (attempt >= len(self._AUTO_UPLOAD_RETRY_DELAYS_SECONDS)
                             or not _is_transient_upload_error(error)):
                         # The finalized local session remains untouched, so a
                         # terminal failure can still be retried manually.
-                        self._upload_states[session_id] = {"state": "error", "detail": str(error)}
+                        self._upload_states[session_id] = {"state": "error", "detail": str(error), "metadata": notes}
                         await self._broadcast_status()
                         return
                     delay = self._AUTO_UPLOAD_RETRY_DELAYS_SECONDS[attempt]
@@ -1082,6 +1269,7 @@ class RobotDataService:
                     await self._broadcast_status()
 
         asyncio.create_task(upload(), name=f"upload-recording-{session_id}")
+        return {"session_id": session_id, "state": "uploading"}
 
     def _record_upload_progress(
         self,
@@ -1107,9 +1295,14 @@ class RobotDataService:
         current = self._upload_states.get(session_id)
         if current is None or current.get("state") not in {"waiting_for_video", "error", "complete"}:
             raise FtcLogError("This recording cannot be deleted in its current state")
-        if self._recording_uploader is not None:
-            await asyncio.to_thread(self._recording_uploader.delete, session_id)
-        await asyncio.to_thread(self._raw_recorder.delete_session, session_id)
+        self._upload_states[session_id] = {"state": "deleting"}
+        try:
+            if self._recording_uploader is not None:
+                await asyncio.to_thread(self._recording_uploader.delete, session_id)
+            await asyncio.to_thread(self._raw_recorder.delete_session, session_id)
+        except Exception:
+            self._upload_states[session_id] = current
+            raise
         self._upload_states[session_id] = {"state": "deleted", "detail": "Recording deleted locally"}
         await self._broadcast_status()
         return {"session_id": session_id, "state": "deleted"}
@@ -1120,7 +1313,12 @@ class RobotDataService:
         current = self._upload_states.get(session_id)
         if current is None or current.get("state") not in {"ready_to_upload", "error"}:
             raise FtcLogError("This recording cannot be discarded in its current state")
-        await asyncio.to_thread(self._raw_recorder.delete_session, session_id)
+        self._upload_states[session_id] = {"state": "deleting"}
+        try:
+            await asyncio.to_thread(self._raw_recorder.delete_session, session_id)
+        except Exception:
+            self._upload_states[session_id] = current
+            raise
         self._upload_states[session_id] = {"state": "discarded", "detail": "Recording discarded from this laptop"}
         await self._broadcast_status()
         return {"session_id": session_id, "state": "discarded"}
@@ -1135,37 +1333,13 @@ class RobotDataService:
         return {"session_id": session_id, "state": "local_deleted"}
 
     async def _broadcast_status(self) -> None:
-        message = {"kind": "robot_data_status", "data": self.status()}
-        stale: list[WebSocket] = []
-        for socket in tuple(self._sockets):
-            try:
-                await socket.send_json(message)
-            except RuntimeError:
-                stale.append(socket)
-        for socket in stale:
-            self._sockets.discard(socket)
+        self._browser_broadcast.publish(self._sockets, {"kind": "robot_data_status", "data": self.status()})
 
     async def _broadcast_telemetry(self, update: TelemetryUpdate) -> None:
-        message = {"kind": update.kind, "data": update.data}
-        stale: list[WebSocket] = []
-        for socket in tuple(self._telemetry_sockets):
-            try:
-                await socket.send_json(message)
-            except RuntimeError:
-                stale.append(socket)
-        for socket in stale:
-            self._telemetry_sockets.discard(socket)
+        self._browser_broadcast.publish(self._telemetry_sockets, {"kind": update.kind, "data": update.data})
 
     async def _broadcast_debug(self, message: dict[str, Any]) -> None:
-        envelope = {"kind": "debug", "data": message}
-        stale: list[WebSocket] = []
-        for socket in tuple(self._debug_sockets):
-            try:
-                await socket.send_json(envelope)
-            except RuntimeError:
-                stale.append(socket)
-        for socket in stale:
-            self._debug_sockets.discard(socket)
+        self._browser_broadcast.publish(self._debug_sockets, {"kind": "debug", "data": message})
 
 
 service = DriverStationService()
@@ -1232,7 +1406,7 @@ def get_status() -> dict[str, Any]:
     return service.status()
 
 
-def _is_transient_upload_error(error: RecordingUploadError) -> bool:
+def _is_transient_upload_error(error: RecordingUploadError | OSError) -> bool:
     """Return whether a retained recording should get an automatic retry."""
 
     detail = str(error).lower()
@@ -1255,6 +1429,50 @@ def get_robot_data_status() -> dict[str, Any]:
 @app.get("/api/debug/status")
 def get_debug_status() -> dict[str, Any]:
     return robot_data_service.debug_status()
+
+
+@app.post("/api/debug/target")
+async def select_debug_target(request: DebugTargetRequest):
+    try:
+        robot_data_service.select_debug_target(request.session_id)
+        await robot_data_service.select_capture_session(request.session_id)
+        await robot_data_service._broadcast_telemetry(TelemetryUpdate("telemetry_state", robot_data_service.telemetry_state()))
+        return robot_data_service.debug_status()
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+
+
+@app.post("/api/debug/control/acquire")
+def acquire_debug_control():
+    try:
+        return {"lease_id": robot_data_service.acquire_debug_control()}
+    except RuntimeError as error:
+        raise HTTPException(409, str(error)) from error
+
+
+@app.post("/api/debug/control/renew")
+async def renew_debug_control(request: ControlLeaseRequest):
+    try:
+        await robot_data_service.renew_debug_control(request.lease_id)
+        return {"ok": True}
+    except (RuntimeError, OSError) as error:
+        raise HTTPException(409, str(error)) from error
+
+
+@app.post("/api/debug/control/arm")
+async def arm_debug_control(request: ControlLeaseRequest):
+    try:
+        await robot_data_service.arm_debug_control(request.lease_id)
+        return {"ok": True}
+    except (RuntimeError, OSError) as error:
+        raise HTTPException(409, str(error)) from error
+
+
+@app.post("/api/debug/control/release")
+def release_debug_control(request: ControlLeaseRequest):
+    if robot_data_service._debug_lease == request.lease_id:
+        robot_data_service._debug_lease = None
+    return {"ok": True}
 
 
 @app.post("/api/debug/select")
@@ -1327,7 +1545,9 @@ def download_robot_data_recording(session_id: str, log_name: str) -> FileRespons
 @app.post("/api/data/recordings/{session_id}/upload")
 async def upload_robot_data_recording(session_id: str, request: RecordingUploadRequest) -> dict[str, Any]:
     try:
-        return await robot_data_service.upload_recording(session_id, keep_local=request.keep_local)
+        return await robot_data_service.upload_recording(
+            session_id, metadata=request, keep_local=request.keep_local
+        )
     except (RecordingUploadError, FtcLogError) as error:
         raise _http_error(error) from error
 
@@ -1563,6 +1783,8 @@ def launch_opmode(request: OpModeRequest) -> dict[str, Any]:
 
 @app.post("/api/debug/launch")
 def launch_debugger(request: OpModeRequest) -> dict[str, Any]:
+    if request.name != "FTC Advanced Debugger":
+        raise HTTPException(400, "Select FTC Advanced Debugger")
     try:
         return service.launch_opmode(request)
     except ControlHubError as error:
@@ -1575,6 +1797,28 @@ def stop_opmode() -> dict[str, Any]:
         return service.stop_opmode()
     except ControlHubError as error:
         raise _http_error(error) from error
+
+
+@app.post("/api/control/acquire")
+def acquire_control() -> dict[str, str]:
+    try:
+        return {"lease_id": service._require_client().acquire_control()}
+    except ControlHubError as error:
+        raise _http_error(error) from error
+
+
+@app.post("/api/control/renew", status_code=204)
+def renew_control(request: ControlLeaseRequest) -> None:
+    try:
+        service._require_client().renew_control(request.lease_id)
+    except ControlHubError as error:
+        raise _http_error(error) from error
+
+
+@app.post("/api/control/release", status_code=204)
+def release_control() -> None:
+    if service._client is not None:
+        service._client.release_control()
 
 
 @app.put("/api/gamepads/{user}", status_code=204)

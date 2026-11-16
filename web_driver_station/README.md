@@ -140,12 +140,13 @@ recordings somewhere other than the default directory.
 Camera capture starts before the telemetry protocol supplies its UUID, so it
 uses a private staging folder briefly. The first raw telemetry packet binds the
 video to `recordings/<telemetry-session-uuid>/video/`; the raw log, video,
-manifest, and frame maps are then uploaded together automatically once both
-are finalized. Completed uploads keep the local session until the dashboard
-operator explicitly deletes it. Failed uploads keep the local artifacts and
-offer Retry. If no telemetry session arrives, the staged video is preserved and
-the camera panel reports the recovery path instead of uploading an unpaired
-clip.
+manifest, and frame maps are ready to upload once both are finalized. The
+Driver Station prompts for a title and description before either upload option.
+The recorder library shows both alongside the replay. You can keep the laptop
+copy or have it removed after a successful upload. Failed uploads keep the
+local artifacts and recording details for retry. If no telemetry session
+arrives, the staged video is preserved and the camera panel reports its
+recovery path.
 
 Use `GET /api/data/recordings` to list saved sessions, and download a finalized
 file with `GET /api/data/recordings/{session-id}/stream-00000.ftclog`.

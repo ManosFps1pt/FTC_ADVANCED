@@ -1,4 +1,8 @@
 repositories {
+    // Release candidates are staged locally; CI supplies this explicit repository.
+    if (project.hasProperty('ftcloggerRepository')) {
+        maven { url = uri(project.property('ftcloggerRepository')) }
+    }
     mavenCentral()
     google() // Needed for androidx
     maven { url = "https://mymaven.bylazar.com/releases" }

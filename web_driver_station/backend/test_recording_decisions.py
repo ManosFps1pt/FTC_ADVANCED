@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 import unittest
 import uuid
@@ -8,9 +9,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from pydantic import ValidationError
+
 from .ftclog import FtcLogError, RawFtcLogRecorder
-from .main import RobotDataService
-from .recording_uploader import RecordingUploadError
+from .main import RecordingUploadRequest, RobotDataService
+from .recording_metadata import RECORDING_METADATA_FILE, RecordingMetadata
+from .recording_uploader import RecordingUploadError, _validated_session
+
+NOTES = RecordingMetadata(title="Drive tuning", description="First run\n\nLowered the gain.")
 
 
 class _FakeUploader:
@@ -19,6 +25,10 @@ class _FakeUploader:
 
     def upload(self, directory: Path, *, progress_callback=None):
         self.calls.append(directory)
+        source, _, files = _validated_session(directory)
+        metadata_path = source / RECORDING_METADATA_FILE
+        if metadata_path not in files:
+            raise RecordingUploadError("Recording details are missing from the upload")
         if progress_callback is not None:
             progress_callback(1, 1, "raw/stream-00000.ftclog")
         return SimpleNamespace(uploaded_files=1, skipped_files=0)
@@ -33,13 +43,24 @@ class _FlakyUploader(_FakeUploader):
         self._failures_remaining = 1
 
     def upload(self, directory: Path, *, progress_callback=None):
-        self.calls.append(directory)
         if self._failures_remaining:
+            self.calls.append(directory)
             self._failures_remaining -= 1
             raise RecordingUploadError("SSH connection failed: Device disconnected")
-        if progress_callback is not None:
-            progress_callback(1, 1, "raw/stream-00000.ftclog")
-        return SimpleNamespace(uploaded_files=1, skipped_files=0)
+        return super().upload(directory, progress_callback=progress_callback)
+
+
+class RecordingUploadRequestTests(unittest.TestCase):
+    def test_upload_request_requires_both_fields_and_trims_them(self) -> None:
+        for body in ({}, {"title": "  ", "description": "Details"}, {"title": "Drive", "description": "\n"}):
+            with self.subTest(body=body), self.assertRaises(ValidationError):
+                RecordingUploadRequest.model_validate(body)
+
+        request = RecordingUploadRequest(
+            title="  Drive tuning ", description="\nFirst run\n\nLowered the gain. ", keep_local=True,
+        )
+        self.assertEqual(NOTES.title, request.title)
+        self.assertEqual(NOTES.description, request.description)
 
 
 class RecordingDecisionTests(unittest.IsolatedAsyncioTestCase):
@@ -96,7 +117,9 @@ class RecordingDecisionTests(unittest.IsolatedAsyncioTestCase):
             # A corrected video can be retried without replacing the raw log.
             service._video_errors.pop(failed_session)
             video_ready = True
-            self.assertEqual("uploading", (await service.upload_recording(failed_session, keep_local=True))["state"])
+            result = await service.upload_recording(failed_session, metadata=NOTES, keep_local=True)
+            self.assertEqual("uploading", result["state"])
+            await self._wait_for_upload_state(service, failed_session, "complete")
 
     async def test_transient_upload_disconnect_retries_automatically(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -109,14 +132,39 @@ class RecordingDecisionTests(unittest.IsolatedAsyncioTestCase):
 
             with patch.object(service, "_AUTO_UPLOAD_RETRY_DELAYS_SECONDS", (0.001,)):
                 await service._finalize_recording(session_id)
-                await service.upload_recording(session_id, keep_local=True)
-                for _ in range(40):
-                    if service._upload_states[session_id]["state"] == "complete":
-                        break
-                    await asyncio.sleep(0.01)
+                await service.upload_recording(session_id, metadata=NOTES, keep_local=True)
+                await self._wait_for_upload_state(service, session_id, "complete")
 
-            self.assertEqual("complete", service._upload_states[session_id]["state"])
             self.assertEqual(2, len(uploader.calls))
+            session_path = service._raw_recorder.session_path(session_id)
+            self.assertEqual(NOTES.model_dump(), json.loads((session_path / RECORDING_METADATA_FILE).read_bytes()))
+
+    async def test_failed_upload_offers_same_metadata_on_manual_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = RobotDataService()
+            service._raw_recorder = RawFtcLogRecorder(Path(directory))
+            service._recording_uploader = _FlakyUploader()
+            session_id = str(uuid.uuid4())
+            service._raw_recorder.append(session_id, b"frame", 1)
+            await service._finalize_recording(session_id)
+
+            with patch.object(service, "_AUTO_UPLOAD_RETRY_DELAYS_SECONDS", ()):
+                await service.upload_recording(session_id, metadata=NOTES, keep_local=True)
+                await self._wait_for_upload_state(service, session_id, "error")
+            self.assertEqual(NOTES.model_dump(), service.status()["recording"]["uploads"][session_id]["metadata"])
+
+            changed = RecordingMetadata(title="Changed", description="Different notes")
+            await service.upload_recording(session_id, metadata=changed, keep_local=True)
+            await self._wait_for_upload_state(service, session_id, "complete")
+            session_path = service._raw_recorder.session_path(session_id)
+            self.assertEqual(NOTES.model_dump(), json.loads((session_path / RECORDING_METADATA_FILE).read_bytes()))
+
+    async def _wait_for_upload_state(self, service: RobotDataService, session_id: str, expected: str) -> None:
+        for _ in range(100):
+            if service._upload_states[session_id]["state"] == expected:
+                return
+            await asyncio.sleep(0.01)
+        self.fail(f"Expected {expected}, got {service._upload_states[session_id]}")
 
     async def test_upload_progress_tracks_total_bytes_and_current_file(self) -> None:
         service = RobotDataService()
@@ -155,6 +203,39 @@ class RecordingDecisionTests(unittest.IsolatedAsyncioTestCase):
             await service._on_connection(False, peer)
 
             self.assertEqual([session_id], stopped)
+
+
+    async def test_interrupted_stream_can_upload_without_hiding_the_interruption(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = RobotDataService()
+            service._raw_recorder = RawFtcLogRecorder(Path(directory))
+            service._recording_uploader = _FakeUploader()
+            session = str(uuid.uuid4())
+            peer = ("127.0.0.1", 12345)
+            partial = service._raw_recorder.append(session, b"captured frame", 1)
+            service._connection_sessions[peer] = session
+            await service._on_connection(False, peer)
+            self.assertTrue(partial.is_file())
+            self.assertEqual("ready_to_upload", service._upload_states[session]["state"])
+            self.assertIn("interrupted", service._upload_states[session]["detail"])
+            _, _, files = _validated_session(partial.parent.parent)
+            self.assertIn(partial.resolve(), files)
+            await service.upload_recording(session, metadata=NOTES, keep_local=True)
+            await self._wait_for_upload_state(service, session, "complete")
+            self.assertTrue(partial.is_file())
+
+    async def test_active_reconnected_stream_still_blocks_upload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = RawFtcLogRecorder(Path(directory))
+            session = str(uuid.uuid4())
+            recorder.append(session, b"first", 1)
+            recorder.close_session(session, complete=False)
+            recorder.append(session, b"reconnected", 2)
+            with self.assertRaisesRegex(RecordingUploadError, "active or unclosed"):
+                _validated_session(recorder.session_path(session))
+            recorder.close_session(session)
+            _, _, files = _validated_session(recorder.session_path(session))
+            self.assertEqual(3, len(files))
 
 
 if __name__ == "__main__":

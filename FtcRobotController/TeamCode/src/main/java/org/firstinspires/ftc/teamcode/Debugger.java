@@ -2,9 +2,11 @@ package org.firstinspires.ftc.teamcode;
 
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
-import org.firstinspires.ftc.teamcode.data.protocol.DebugRiskClass;
+import io.github.manosfps1pt.ftclogger.protocol.DebugRiskClass;
 
 import java.util.Collections;
+import io.github.manosfps1pt.ftclogger.debug.SelectableOpMode;
+import io.github.manosfps1pt.ftclogger.debug.FrictionTool;
 
 /**
  * General FTC Advanced debugging selector.
@@ -44,17 +46,17 @@ public final class Debugger extends SelectableOpMode {
                         "Simple Motor Power",
                         "Bounded forward/reverse power control for a registered free-spin motor.",
                         DebugRiskClass.DEBUG_FREE_SPIN,
-                        1,
+                        0.35,
                         true,
                         "",
-                        () -> new MotorPowerTool(FREE_SPIN_MOTOR_NAME),
+                        () -> new MotorPowerTool(FREE_SPIN_MOTOR_NAME,0.35,FREE_SPIN_CURRENT_LIMIT_AMPS,FREE_SPIN_REVERSE_ALLOWED),
                         Collections.singletonList(new SelectableOpMode.Parameter(
                                 "motor.power",
                                 "Motor Power",
                                 "Normalized motor power. Negative values reverse direction.",
                                 0.0,
-                                -1,
-                                1,
+                                FREE_SPIN_REVERSE_ALLOWED ? -0.35 : 0,
+                                0.35,
                                 0.01,
                                 "normalized",
                                 true,

@@ -118,7 +118,7 @@ class FeedforwardApiTests(unittest.IsolatedAsyncioTestCase):
             store = DebuggerResults(Path(directory))
             service = SimpleNamespace(_debug_results=store, _debug_ready={"nodeId": "motor", "toolInstanceId": "tool", "benchmarks": [definition()]},
                 _debug_manifest={}, _server=SimpleNamespace(send=AsyncMock()), _active_peer=None,
-                _debug_envelope=lambda **kw: wire.Envelope(**kw))
+                _debug_envelope=lambda lease_id=None, **kw: wire.Envelope(**kw))
             app = FastAPI(); install_debugger_controls(app, service)
             route = next(r.endpoint for r in app.routes if r.path == "/api/debug/runs" and "POST" in r.methods)
             request = RunRequest(node_id="motor", tool_instance_id="tool", benchmark_id="motor.feedforward.v1",

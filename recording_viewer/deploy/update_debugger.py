@@ -15,10 +15,14 @@ sys.path.insert(0, str(REPO))
 from web_driver_station.backend.recording_uploader import RecordingUploader, UploadSettings, _mkdirs
 
 ROOT = "/opt/ftc-recording-viewer"
-FILES = ["recording_viewer/backend/main.py", "web_driver_station/backend/ftclog.py",
+FILES = ["recording_viewer/backend/main.py", "recording_viewer/backend/video_sync.py",
+         "recording_viewer/backend/estimate_video_delay.py", "recording_viewer/backend/requirements.txt",
+         "web_driver_station/backend/ftclog.py",
          "web_driver_station/backend/protocol_codec.py", "web_driver_station/backend/protocol/robot_data_pb2.py",
          "web_driver_station/backend/debugger_results.py", "web_driver_station/backend/debugger_analysis.py",
-         "web_driver_station/backend/debugger_api.py", "recording_viewer/deploy/reload_nginx_after_renewal.sh",
+         "web_driver_station/backend/debugger_api.py", "web_driver_station/backend/debugger_inputs.py",
+         "web_driver_station/backend/recording_metadata.py",
+         "web_driver_station/backend/feedforward_analysis.py", "recording_viewer/deploy/reload_nginx_after_renewal.sh",
          "recording_viewer/deploy/enable_ip_https.sh"]
 
 
@@ -31,8 +35,8 @@ def main():
     release = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     stage, backup = f"{ROOT}/.deploy-stage/{release}", f"{ROOT}/.deploy-backups/{release}"
     client = RecordingUploader(settings)._connect()
-    def command(value):
-        _, stdout, stderr = client.exec_command(value, timeout=60)
+    def command(value, timeout=60):
+        _, stdout, stderr = client.exec_command(value, timeout=timeout)
         output, error = stdout.read().decode(), stderr.read().decode()
         if stdout.channel.recv_exit_status() != 0: raise RuntimeError(error or output)
         if output: print(output.strip())
@@ -41,7 +45,16 @@ def main():
             for relative in files:
                 target=f"{stage}/{relative}"
                 _mkdirs(sftp, target.rsplit("/",1)[0]);sftp.put(str(REPO/relative),target)
-        check="from recording_viewer.backend.main import create_library_app; from pathlib import Path; a=create_library_app(Path('/srv/ftc-recordings')); assert any(r.path=='/api/debug/results' for r in a.routes); print('Staged backend imports and routes passed')"
+        command("if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then "
+                "sudo -n apt-get update -qq && sudo -n env DEBIAN_FRONTEND=noninteractive "
+                "apt-get install -y -qq ffmpeg >/dev/null; fi", timeout=600)
+        command(f"{ROOT}/.venv/bin/python -m pip install -q -r "
+                f"{shlex.quote(stage + '/recording_viewer/backend/requirements.txt')}", timeout=600)
+        check=("from recording_viewer.backend.estimate_video_delay import read_video; "
+               "from recording_viewer.backend.main import create_library_app; from pathlib import Path; "
+               "paths=create_library_app(Path('/srv/ftc-recordings')).openapi()['paths']; "
+               "assert {'/api/debug/results', '/api/recordings/{session_id}/video/{index}/status'} <= paths.keys(); "
+               "print('Staged backend imports and routes passed')")
         command(f"cd {shlex.quote(stage)} && {ROOT}/.venv/bin/python -B -c {shlex.quote(check)}")
         publish="""import json,os,shutil,sys
 from pathlib import Path
@@ -61,7 +74,8 @@ print('Published '+str(len(files))+' files; backup '+str(backup))
         command("sudo systemctl restart ftc-recording-viewer")
         command(f"sudo install -m 0755 {ROOT}/recording_viewer/deploy/reload_nginx_after_renewal.sh /etc/letsencrypt/renewal-hooks/deploy/ftc-recording-viewer-nginx")
         command("sudo /etc/letsencrypt/renewal-hooks/deploy/ftc-recording-viewer-nginx")
-        command("curl --retry 8 --retry-connrefused --retry-delay 1 -fsS http://127.0.0.1:8002/api/debug/results")
+        command("curl --retry 8 --retry-connrefused --retry-delay 1 -fsS -o /dev/null "
+                "http://127.0.0.1:8002/api/debug/results")
         command("systemctl is-active ftc-recording-viewer")
         print("Rollback: copy the backed-up files over their matching paths and restart ftc-recording-viewer.")
     finally: client.close()

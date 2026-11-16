@@ -216,7 +216,7 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
             service=SimpleNamespace(_debug_results=store,_recording_uploader=None,_active_peer=None,
                 _debug_manifest={"nodes":[{"id":"motor","label":"Registered motor"},{"id":"motor.friction","parentId":"motor"}]},
                 _debug_ready={"nodeId":"motor.friction","toolInstanceId":"instance","benchmarks":[{"id":"motor.friction.v1"}]},
-                _debug_envelope=lambda **body:wire.Envelope(**body),_server=SimpleNamespace(send=send))
+                _debug_envelope=lambda lease_id=None, **body:wire.Envelope(**body),_server=SimpleNamespace(send=send))
             app=FastAPI();install_debugger_controls(app,service)
             endpoints={(r.path,next(iter(r.methods))):r.endpoint for r in app.routes if hasattr(r,"methods")}
             start=endpoints[("/api/debug/runs","POST")]
@@ -224,7 +224,8 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
             run_id=(await start(request))["runId"]
             self.assertEqual("Registered motor",store.list()[0]["mechanismLabel"])
             self.assertEqual("benchmark.run",sent[-1].debug_command_request.command_id)
-            await endpoints[("/api/debug/runs/{run_id}/keepalive","POST")](run_id)
+            from .debugger_api import LeaseRequest
+            await endpoints[("/api/debug/runs/{run_id}/keepalive","POST")](run_id, LeaseRequest())
             self.assertEqual("benchmark.keepalive",sent[-1].debug_command_request.command_id)
             await endpoints[("/api/debug/runs/{run_id}/abort","POST")](run_id)
             self.assertEqual("benchmark.abort",sent[-1].debug_command_request.command_id)

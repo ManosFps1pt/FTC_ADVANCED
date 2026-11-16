@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package ftc.robotdata.v2;
 
-option java_package = "org.firstinspires.ftc.teamcode.data.protocol";
+option java_package = "io.github.manosfps1pt.ftclogger.protocol";
 option java_multiple_files = true;
 
 // Protocol version 2 replaces the debug JSON transport with protobuf. The
@@ -13,6 +13,7 @@ message Envelope {
   bytes connection_id = 3;         // 16-byte RFC 4122 UUID
   uint64 connection_sequence = 4;
   uint64 robot_elapsed_ns = 5;
+  string control_lease_id = 6;
 
   oneof body {
     Hello hello = 10;
@@ -72,6 +73,7 @@ message Device {
   string label = 3;
   string subsystem = 4;
   string device_type = 5;
+  map<string, string> display_hints = 6;
 }
 
 message Channel {
@@ -85,6 +87,7 @@ message Channel {
   ChannelRole role = 8;
   double sample_hint_hz = 9;       // zero means unspecified
   string description = 10;
+  string coordinate_frame = 11;
 }
 
 enum ValueType {
@@ -107,6 +110,7 @@ enum ChannelRole {
   ERROR = 4;
   STATUS = 5;
   DIAGNOSTIC = 6;
+  ESTIMATED = 7;
 }
 
 message SampleBatch {
@@ -120,6 +124,7 @@ message Snapshot {
   // Control Hub-selected highlight. The laptop may apply a live local override
   // when it creates its incident manifest, while retaining this raw value.
   bool highlighted = 4;
+  optional uint64 robot_time_ns = 5;
 }
 
 message ChannelValue {
@@ -468,4 +473,6 @@ message DebugSafetyState {
   bool watchdog_healthy = 2;
   bool output_allowed = 3;
   string blocked_reason = 4;
+  bool armed = 5;
+  string control_lease_id = 6;
 }

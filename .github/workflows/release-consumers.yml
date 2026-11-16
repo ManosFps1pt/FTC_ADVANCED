@@ -1,0 +1,49 @@
+name: Release consumer matrix
+on:
+  workflow_dispatch:
+    inputs:
+      logger_ref:
+        description: Immutable pushed ftclogger commit or release tag
+        required: true
+        type: string
+      biobuzz_ref:
+        description: Pushed BIOBUZZ commit containing the consumer migration
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  consumers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: app
+      - uses: actions/checkout@v5
+        with:
+          repository: ManosFps1pt/ftclogger
+          ref: ${{ inputs.logger_ref }}
+          path: ftclogger
+      - uses: actions/checkout@v5
+        with:
+          repository: Talos-Edurobots/BIOBUZZ
+          ref: ${{ inputs.biobuzz_ref }}
+          path: BIOBUZZ
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - uses: gradle/actions/setup-gradle@v4
+      - run: sdkmanager "platforms;android-30" "build-tools;35.0.0"
+      - name: Stage and test library
+        working-directory: ftclogger
+        run: bash gradlew --no-daemon testReleaseUnitTest lintRelease publishReleasePublicationToBuildRepository
+      - name: Check canonical schema matches app
+        run: diff --strip-trailing-cr ftclogger/protocol/robot_data.proto app/protocol/robot_data.proto
+      - name: Build FTC_ADVANCED examples
+        working-directory: app/FtcRobotController
+        run: bash gradlew --no-daemon :TeamCode:assembleDebug -PftcloggerRepository="$GITHUB_WORKSPACE/ftclogger/build/repository"
+      - name: Build and test BIOBUZZ
+        working-directory: BIOBUZZ
+        run: bash gradlew --no-daemon :TeamCode:assembleDebug :TeamCode:testDebugUnitTest -PftcloggerRepository="$GITHUB_WORKSPACE/ftclogger/build/repository"

@@ -14,6 +14,8 @@ type Status = {
 
 type PingResult = { latency_ms: number | null };
 
+type RecordingMetadata = { title: string; description: string };
+
 type RobotDataStatus = {
   listening: boolean;
   connected: boolean;
@@ -29,6 +31,7 @@ type RobotDataStatus = {
       totalBytes?: number;
       uploadedBytes?: number;
       currentFile?: string | null;
+      metadata?: RecordingMetadata;
     }>;
   };
 };
@@ -430,33 +433,61 @@ function RecordingUploadModal({
   sessionId,
   uploadState,
   busy,
-  onUploadOnly,
-  onUploadAndKeepLocal,
+  error,
+  onUpload,
   onDiscard,
 }: {
   sessionId: string;
-  uploadState: { state: string; detail?: string };
+  uploadState: { state: string; detail?: string; metadata?: RecordingMetadata };
   busy: boolean;
-  onUploadOnly: () => void;
-  onUploadAndKeepLocal: () => void;
+  error: string | null;
+  onUpload: (metadata: RecordingMetadata, keepLocal: boolean) => void;
   onDiscard: () => void;
 }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [title, setTitle] = useState(uploadState.metadata?.title ?? "");
+  const [description, setDescription] = useState(uploadState.metadata?.description ?? "");
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    return () => dialog?.close();
+  }, []);
+
   const failed = uploadState.state === "error";
+  const savedMetadata = uploadState.metadata;
+  const metadata = savedMetadata ?? { title: title.trim(), description: description.trim() };
+  const canUpload = !busy && Boolean(metadata.title && metadata.description);
+
   return (
-    <div className="recording-modal-backdrop" role="presentation">
-      <section className="recording-modal panel" role="dialog" aria-modal="true" aria-labelledby="recording-modal-title">
-        <p className="eyebrow">Telemetry recording</p>
-        <h2 id="recording-modal-title">{failed ? "Recording needs attention" : "Recording ready"}</h2>
-        <p>{failed ? uploadState.detail : "Choose what to do before this telemetry and video recording is uploaded."}</p>
-        <code className="recording-session-id">{sessionId}</code>
-        {failed && <p className="recording-modal-error">The local telemetry and video remain intact. You can retry the upload or discard the recording.</p>}
+    <dialog className="recording-modal panel" ref={dialogRef} aria-labelledby="recording-modal-title" onCancel={event => event.preventDefault()}>
+      <p className="eyebrow">Telemetry recording</p>
+      <h2 id="recording-modal-title">{failed ? "Recording needs attention" : "Recording ready"}</h2>
+      {uploadState.detail && <p role={failed ? "alert" : undefined}>{uploadState.detail}</p>}
+      <code className="recording-session-id">{sessionId}</code>
+      <form onSubmit={event => {
+        event.preventDefault();
+        if (!canUpload) return;
+        const submitter = (event.nativeEvent as SubmitEvent).submitter;
+        onUpload(metadata, submitter instanceof HTMLButtonElement && submitter.value === "keep_local");
+      }}>
+        <label className="recording-field">
+          Title
+          <input type="text" required maxLength={120} disabled={busy} readOnly={Boolean(savedMetadata)}
+            value={savedMetadata?.title ?? title} onChange={event => setTitle(event.target.value)} />
+        </label>
+        <label className="recording-field">
+          Description
+          <textarea required rows={4} maxLength={4000} disabled={busy} readOnly={Boolean(savedMetadata)}
+            value={savedMetadata?.description ?? description} onChange={event => setDescription(event.target.value)} />
+        </label>
+        {error && <p className="recording-modal-error" role="alert">{error}</p>}
         <div className="recording-modal-actions">
-          <button className="primary" type="button" disabled={busy} onClick={onUploadOnly}>{failed ? "Retry upload only" : "Upload only"}</button>
-          <button className="secondary" type="button" disabled={busy} onClick={onUploadAndKeepLocal}>{failed ? "Retry and keep laptop copy" : "Upload and keep laptop copy"}</button>
+          <button className="primary" type="submit" disabled={!canUpload}>{failed ? "Retry upload only" : "Upload only"}</button>
+          <button className="secondary" type="submit" value="keep_local" disabled={!canUpload}>{failed ? "Retry and keep laptop copy" : "Upload and keep laptop copy"}</button>
           <button className="danger" type="button" disabled={busy} onClick={onDiscard}>Discard recording</button>
         </div>
-      </section>
-    </div>
+      </form>
+    </dialog>
   );
 }
 
@@ -520,6 +551,7 @@ function DriverStationPage({
   const [notice, setNotice] = useState("Connect to a controlled test Robot Controller.");
   const [busy, setBusy] = useState(false);
   const [recordingBusy, setRecordingBusy] = useState(false);
+  const [recordingError, setRecordingError] = useState<{ sessionId: string; detail: string } | null>(null);
   const [adbBusy, setAdbBusy] = useState(false);
   const [pingMs, setPingMs] = useState<number | null>(null);
   const [batteryVoltage, setBatteryVoltage] = useState<number | null>(null);
@@ -539,14 +571,45 @@ function DriverStationPage({
   const directDraftDirtyRef = useRef(false);
   const tcpWorkspaceRef = useRef<"telemetry" | "debug" | null>(null);
   const driverStationConnectedRef = useRef(false);
+  const [controlLease, setControlLease] = useState<string | null>(null);
+  const controlLeaseRef = useRef<string | null>(null);
+  controlLeaseRef.current = controlLease;
 
   const connected = status.connected;
   // FTC accepts driver input after an OpMode has been initialized. Keep every
   // controller neutral outside that lifecycle window, rather than merely
   // disabling controls that can still occupy the dashboard.
   const opModeAcceptsGamepad = status.started_opmode || status.robot_state === "INIT" || status.robot_state === "RUNNING";
-  const gamepadEnabled = connected && opModeAcceptsGamepad;
+  const gamepadEnabled = connected && opModeAcceptsGamepad && controlLease !== null;
   const physicalMode = physicalControllers.length > 0;
+  useEffect(() => {
+    if (!controlLease) return;
+    let active = true;
+    let pending = false;
+    const release = () => {
+      controlLeaseRef.current = null;
+      setControlLease(null);
+      setGamepad(neutralGamepad());
+      void api<void>("/control/release", { method: "POST" });
+    };
+    const timer = window.setInterval(async () => {
+      if (!active || pending) return;
+      if (!connected || !document.hasFocus()) { release(); return; }
+      pending = true;
+      try {
+        await api<void>("/control/renew", { method: "POST", body: JSON.stringify({ lease_id: controlLease }) });
+      } catch {
+        if (active) { release(); setNotice("Control expired. Acquire control again to drive."); }
+      } finally { pending = false; }
+    }, 100);
+    window.addEventListener("blur", release);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener("blur", release);
+      void api<void>("/control/release", { method: "POST" });
+    };
+  }, [controlLease, connected]);
   const gamepadPanelVisible = gamepadEnabled && !physicalMode;
   const recordingUploads = Object.entries(robotData.recording?.uploads ?? {}).filter(([sessionId]) => sessionId !== "configuration");
   const pendingRecording = recordingUploads.find(([, upload]) => upload.state === "ready_to_upload" || upload.state === "error");
@@ -742,7 +805,7 @@ function DriverStationPage({
               lastPhysicalStatesRef.current[driver] = nextState;
               void api<void>(`/gamepads/${driver}`, {
                 method: "PUT",
-                body: JSON.stringify(nextState),
+                body: JSON.stringify({ ...nextState, lease_id: controlLeaseRef.current }),
               }).catch((error: Error) => {
                 // Do not let a temporary backend restart make the controller
                 // appear sent forever; retry on the next animation frame.
@@ -768,7 +831,7 @@ function DriverStationPage({
     const timer = window.setTimeout(() => {
       void api<void>(`/gamepads/${user}`, {
         method: "PUT",
-        body: JSON.stringify(gamepad),
+        body: JSON.stringify({ ...gamepad, lease_id: controlLeaseRef.current }),
       }).catch((error: Error) => setNotice(error.message));
     }, 15);
     return () => window.clearTimeout(timer);
@@ -849,19 +912,26 @@ function DriverStationPage({
     }
   };
 
-  const recordingAction = async (action: "upload_only" | "upload_keep_local" | "discard") => {
+  const recordingAction = async (decision: { metadata: RecordingMetadata; keepLocal: boolean } | null) => {
     if (!pendingRecording) return;
     const [sessionId] = pendingRecording;
-    if (action === "discard" && !window.confirm("Discard this telemetry and video recording from the laptop? It will not be uploaded and cannot be recovered.")) return;
+    if (!decision && !window.confirm("Discard this telemetry and video recording from the laptop? It will not be uploaded and cannot be recovered.")) return;
     setRecordingBusy(true);
+    setRecordingError(null);
     try {
-      await api(`/data/recordings/${encodeURIComponent(sessionId)}${action === "discard" ? "/discard" : "/upload"}`, {
-        method: action === "discard" ? "DELETE" : "POST",
-        ...(action === "discard" ? {} : { body: JSON.stringify({ keep_local: action === "upload_keep_local" }) }),
-      });
-      setNotice(action === "discard" ? "Recording discarded from this laptop." : action === "upload_keep_local" ? "Recording upload started; the laptop copy will be kept." : "Recording upload started; the laptop copy will be removed after a successful upload.");
+      const path = `/data/recordings/${encodeURIComponent(sessionId)}`;
+      if (decision) {
+        await api(`${path}/upload`, {
+          method: "POST",
+          body: JSON.stringify({ ...decision.metadata, keep_local: decision.keepLocal }),
+        });
+        setNotice(decision.keepLocal ? "Recording upload started. The laptop copy will be kept." : "Recording upload started. The laptop copy will be removed after a successful upload.");
+      } else {
+        await api(`${path}/discard`, { method: "DELETE" });
+        setNotice("Recording discarded from this laptop.");
+      }
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Recording action failed");
+      setRecordingError({ sessionId, detail: error instanceof Error ? error.message : "Recording action failed" });
     } finally {
       setRecordingBusy(false);
     }
@@ -1055,6 +1125,11 @@ function DriverStationPage({
   };
 
   const topbar = <header className="driver-topbar panel">
+    <button type="button" disabled={!connected || controlLease !== null} onClick={() => {
+      void api<{ lease_id: string }>("/control/acquire", { method: "POST" })
+        .then((result) => { setGamepad(neutralGamepad()); lastPhysicalStatesRef.current = { 1: null, 2: null }; setControlLease(result.lease_id); })
+        .catch((error: Error) => setNotice(error.message));
+    }}>{controlLease ? "Control acquired" : "Acquire control"}</button>
     <div className="driver-brand"><p className="eyebrow">Local lab dashboard</p><h1>FTC Driver Station</h1></div>
     <div className="topbar-status" aria-label="Driver Station status">
       <div className={`connection ${connected ? "online" : "offline"}`}><span className="status-dot" />{connected ? `Connected · ${status.robot_state}` : "Disconnected"}{connected && <span className="ping">Ping {pingMs === null ? "—" : `${pingMs.toFixed(1)} ms`}</span>}{connected && <span className="topbar-battery">Battery {batteryVoltage === null ? "—" : `${batteryVoltage.toFixed(2)} V`}</span>}</div>
@@ -1262,14 +1337,15 @@ function DriverStationPage({
       <RobotConfiguration connected={connected} robotState={status.robot_state} startedOpmode={status.started_opmode} />
     </main>}
     {page === "telemetry" && <TelemetryDashboard topbar={topbar} opModeControl={opModeControl} />}
-    {page === "debug" && <DebuggerPage opModeControl={opModeControl} />}
+    {page === "debug" && <DebuggerPage opModeControl={opModeControl} onDebuggerLaunched={() => setOpmode("FTC Advanced Debugger")} />}
     {pendingRecording && <RecordingUploadModal
+      key={pendingRecording[0]}
       sessionId={pendingRecording[0]}
       uploadState={pendingRecording[1]}
       busy={recordingBusy}
-      onUploadOnly={() => void recordingAction("upload_only")}
-      onUploadAndKeepLocal={() => void recordingAction("upload_keep_local")}
-      onDiscard={() => void recordingAction("discard")}
+      error={recordingError?.sessionId === pendingRecording[0] ? recordingError.detail : null}
+      onUpload={(metadata, keepLocal) => void recordingAction({ metadata, keepLocal })}
+      onDiscard={() => void recordingAction(null)}
     />}
     </>
   );

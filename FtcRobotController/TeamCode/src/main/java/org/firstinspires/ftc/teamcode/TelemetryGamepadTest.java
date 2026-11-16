@@ -4,7 +4,7 @@ import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
-import org.firstinspires.ftc.teamcode.data.StructuredRobotDataClient;
+import io.github.manosfps1pt.ftclogger.StructuredRobotDataClient;
 
 import java.util.Map;
 import java.util.Random;
@@ -71,6 +71,7 @@ public class TelemetryGamepadTest extends OpMode {
 
     @Override
     public void start() {
+        if (dataClient != null) dataClient.markStarted();
         runtime.reset();
         lastMockPoseUpdateSeconds = Double.NEGATIVE_INFINITY;
         lastMockRgbLightUpdateSeconds = Double.NEGATIVE_INFINITY;

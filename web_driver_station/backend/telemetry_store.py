@@ -26,7 +26,7 @@ _IDENTIFIER = re.compile(r"^[a-z][A-Za-z0-9]*(?:\.[a-z][A-Za-z0-9]*)*$")
 _INT64 = re.compile(r"^-?(?:0|[1-9][0-9]*)$")
 _UINT64 = re.compile(r"^(?:0|[1-9][0-9]*)$")
 _VALUE_TYPES = {"float64", "int64", "boolean", "string", "enum", "vector2", "vector3", "pose2d"}
-_ROLES = {"measured", "target", "command", "error", "status", "diagnostic"}
+_ROLES = {"measured", "estimated", "target", "command", "error", "status", "diagnostic"}
 _SEVERITIES = {"debug", "info", "warning", "error", "critical"}
 _GAMEPAD_AXES = ("leftStickX", "leftStickY", "rightStickX", "rightStickY")
 _GAMEPAD_TRIGGERS = ("leftTrigger", "rightTrigger")
@@ -144,13 +144,15 @@ class DeviceDefinition:
     label: str
     subsystem: str
     device_type: str
+    display_hints: dict[str, str] = field(default_factory=dict)
 
-    def to_wire(self) -> dict[str, str]:
+    def to_wire(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "label": self.label,
             "subsystem": self.subsystem,
             "deviceType": self.device_type,
+            "displayHints": self.display_hints,
         }
 
 
@@ -165,6 +167,7 @@ class SignalDefinition:
     role: str
     sample_hint_hz: float | None = None
     description: str | None = None
+    coordinate_frame: str | None = None
 
     def to_wire(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -181,6 +184,8 @@ class SignalDefinition:
             result["sampleHintHz"] = self.sample_hint_hz
         if self.description is not None:
             result["description"] = self.description
+        if self.coordinate_frame is not None:
+            result["coordinateFrame"] = self.coordinate_frame
         return result
 
 
@@ -274,6 +279,7 @@ class TelemetrySession:
     ended: bool = False
     last_seen_at_ms: int = 0
     dropped_samples: str = "0"
+    lifecycle: str = "INIT"
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -290,6 +296,8 @@ class TelemetrySession:
             "eventCount": len(self.events),
             "gapCount": len(self.gaps),
             "droppedSamples": self.dropped_samples,
+            "lifecycle": "STOPPED" if self.ended else self.lifecycle,
+            "sampleAgeMs": max(0, int(time.time()*1000)-self.latest_snapshot.received_at_ms) if self.latest_snapshot else None,
             "lastSeenAtMs": self.last_seen_at_ms or None,
         }
 
@@ -307,10 +315,13 @@ class TelemetryStore:
 
     # Loop-time instrumentation can publish hundreds of snapshots per second. Retain
     # enough samples for the dashboard's 10-second time window at that rate.
-    def __init__(self, *, max_snapshots_per_session: int = 12_000, max_events_per_session: int = 500) -> None:
+    def __init__(self, *, max_snapshots_per_session: int = 12_000, max_events_per_session: int = 500, max_sessions: int = 16) -> None:
         if max_snapshots_per_session <= 0 or max_events_per_session <= 0:
             raise ValueError("history limits must be positive")
         self._max_snapshots = max_snapshots_per_session
+        if max_sessions <= 0:
+            raise ValueError("session limit must be positive")
+        self._max_sessions = max_sessions
         self._max_events = max_events_per_session
         self._sessions: dict[str, TelemetrySession] = {}
         self._latest_session_id: str | None = None
@@ -354,6 +365,8 @@ class TelemetryStore:
                         update = self._ingest_gamepad(session, common)
                     elif message_type == "event":
                         update = self._ingest_event(session, common)
+                        if common["data"].get("name") == "opmode.started":
+                            session.lifecycle = "RUNNING"
                     elif message_type == "gap":
                         update = self._ingest_gap(session, common)
                     elif message_type == "heartbeat":
@@ -414,6 +427,12 @@ class TelemetryStore:
         """Return whether a valid-looking session is already known for resume."""
 
         return isinstance(session_id, str) and session_id in self._sessions
+
+    def select_session(self, session_id: str) -> None:
+        with self._lock:
+            if session_id not in self._sessions:
+                raise ValueError("Unknown telemetry session")
+            self._latest_session_id = session_id
 
     def disconnect_connection(self, connection_id: object) -> list[TelemetryUpdate]:
         """Mark a TCP connection inactive when its transport closes.
@@ -481,6 +500,8 @@ class TelemetryStore:
         assert isinstance(session_id, str)
         session = self._sessions.get(session_id)
         if session is None:
+            if len(self._sessions) >= self._max_sessions:
+                self._sessions.pop(next(iter(self._sessions)))
             session = TelemetrySession(
                 id=session_id,
                 snapshots=deque(maxlen=self._max_snapshots),
@@ -495,7 +516,9 @@ class TelemetryStore:
         session.active_connection_id = common["connectionId"]
         session.ended = False
         session.last_seen_at_ms = received_at_ms
-        self._latest_session_id = session_id
+        current = self._current_session()
+        if current is None or current.ended or current.active_connection_id is None:
+            self._latest_session_id = session_id
         return [TelemetryUpdate("telemetry_session", session.summary())]
 
     def _ingest_catalog(self, session: TelemetrySession, common: Mapping[str, Any]) -> list[TelemetryUpdate]:
@@ -511,11 +534,17 @@ class TelemetryStore:
         devices: dict[str, DeviceDefinition] = {}
         for raw in devices_raw:
             item = _require_object(raw, "catalog device")
+            hints = item.get("displayHints", {})
+            if not isinstance(hints, dict) or len(hints) > 32 or any(
+                not isinstance(k, str) or not isinstance(v, str) or len(k) > 80 or len(v) > 256 for k, v in hints.items()
+            ):
+                raise TelemetryProtocolError("Device display hints must be a bounded string map")
             device = DeviceDefinition(
                 id=_require_identifier(item.get("id"), "catalog device.id"),
                 label=_require_string(item.get("label"), "catalog device.label"),
                 subsystem=_require_identifier(item.get("subsystem"), "catalog device.subsystem"),
                 device_type=_require_string(item.get("deviceType"), "catalog device.deviceType"),
+                display_hints=dict(hints),
             )
             if device.id in devices:
                 raise TelemetryProtocolError(f"Duplicate device id {device.id}")
@@ -552,6 +581,7 @@ class TelemetryStore:
                 role=role,
                 sample_hint_hz=hint,
                 description=description,
+                coordinate_frame=_require_string(item["coordinateFrame"], "coordinateFrame") if item.get("coordinateFrame") else None,
             )
             if signal.id in signals:
                 raise TelemetryProtocolError(f"Duplicate signal id {signal.id}")

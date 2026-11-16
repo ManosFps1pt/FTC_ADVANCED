@@ -28,8 +28,8 @@ video, annotations, and export features later will not affect robot control.
 ## Video playback model
 
 Put an MP4 anywhere inside the selected session folder, for example
-`video/field.mp4`. The viewer serves the original file; it does not use OpenCV,
-duplicate frames, or re-encode it. The snapshot timeline is the master clock:
+`video/field.mp4`. Replay streams the original file using the snapshot timeline
+as its master clock:
 
 - A longer video is logically cut off when the final robot snapshot is reached.
 - A shorter video becomes a black frame while snapshots continue through the
@@ -38,15 +38,22 @@ duplicate frames, or re-encode it. The snapshot timeline is the master clock:
   the viewer selects the snapshot for the master-clock time while the browser
   presents video at its native cadence.
 
-The first version treats each discovered MP4 as an independently selectable
-clip beginning at recording time zero. Segment-to-timeline timestamp sidecars
-and calibrated camera offsets will be added later.
+Each original MP4 is independently selectable. **Sync video** uses the recorded
+RGB indicator commands and the visible flashes to calibrate the selected clip.
+The signed delay is saved beside the original in `<clip-stem>.sync.json`.
+The viewer skips footage outside the telemetry timeline and keeps the full set
+of snapshots available for scrubbing. Use **Export trimmed MP4** to save the
+overlapping footage as `<clip-stem>.synced.mp4`. Each successful export replaces
+the previous trimmed copy for that clip. The server needs FFmpeg and the Python
+dependencies in `recording_viewer/backend/requirements.txt`.
 
 ## Recording library and upload
 
 The hosted service treats `/srv/ftc-recordings` as a library root. Each direct
 UUID-named child is one replay. The browser lists completed sessions first and
-loads a selected session only when requested.
+loads a selected session only when requested. Titles and descriptions entered
+in the Driver Station appear in the library and on the replay page. Older
+recordings remain accessible by date and session ID.
 
 The laptop uploader transfers a finalized session over SFTP using an SSH key,
 verifies the known host, uploads to `.incoming/<session-id>`, and renames the
@@ -68,7 +75,7 @@ For an explicit retry/upload, run:
   --private-key '.\your-upload-key.key'
 ```
 
-For automatic upload, copy `ftc_advanced.local.example.json` to the ignored
+For uploads from the Driver Station, copy `ftc_advanced.local.example.json` to the ignored
 `ftc_advanced.local.json` file and fill in `recording_upload`. Environment
 variables (`FTC_RECORDING_UPLOAD_*`) still override the local file. The SSH
 host is verified against the configured `host_key_fingerprint`; the uploader
