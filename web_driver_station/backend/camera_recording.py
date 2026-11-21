@@ -94,6 +94,7 @@ class CameraRecordingCoordinator:
         self._scrcpy: ScrcpyBackend | None = None
         self._active: _ActiveCapture | None = None
         self._last_error: str | None = None
+        self._recording_notice: str | None = None
         self._preview_requested = False
         self._preview_retry_pending = False
         self._preview_retry_attempt = 0
@@ -119,6 +120,7 @@ class CameraRecordingCoordinator:
                 },
                 "direct": direct_status,
                 "error": self._last_error or direct_error,
+                "recording_notice": self._recording_notice,
             }
 
     def config_dict(self) -> dict[str, Any]:
@@ -218,6 +220,7 @@ class CameraRecordingCoordinator:
             if self._active is not None:
                 raise CameraRecordingError("A camera recording is already active or finalizing")
             self._last_error = None
+            self._recording_notice = None
             if self._config.mode == "adb_volume_up":
                 try:
                     result = self._adb_camera.start_recording()
@@ -296,7 +299,19 @@ class CameraRecordingCoordinator:
                 self._restart_preview_after_failure_locked()
             raise CameraRecordingError(str(error)) from error
         with self._lock:
-            self._complete_capture_locked(active.capture_id, None if result.get("state") in {"COMPLETED", "STOPPED"} else str(result.get("error") or "scrcpy recording failed"))
+            state = result.get("state")
+            # scrcpy can finish writing the MP4 before exiting with its
+            # device-disconnected status. Keep that clip with the session.
+            interrupted = (
+                state == "DISCONNECTED"
+                and result.get("scrcpy_finalized") is True
+                and int(result.get("bytes") or 0) > 0
+            )
+            error = None if state == "COMPLETED" or interrupted else str(
+                result.get("error") or "scrcpy recording failed"
+            )
+            notice = "Camera disconnected early. The video captured before disconnect was saved." if interrupted else None
+            self._complete_capture_locked(active.capture_id, error, notice=notice)
             self._restart_preview_after_failure_locked()
             return self.status()
 
@@ -318,7 +333,7 @@ class CameraRecordingCoordinator:
         with self._lock:
             return self._active is None or self._active.telemetry_session_id != session_id
 
-    def _complete_capture_locked(self, capture_id: str, error: str | None) -> None:
+    def _complete_capture_locked(self, capture_id: str, error: str | None, *, notice: str | None = None) -> None:
         active = self._active
         if active is None or active.capture_id != capture_id:
             return
@@ -333,6 +348,8 @@ class CameraRecordingCoordinator:
                 error = f"Could not attach video to telemetry session: {attach_error}"
         if error:
             self._last_error = error
+        else:
+            self._recording_notice = notice
         callback = self._on_video_finalized
         if callback is not None:
             callback(active.telemetry_session_id, error)

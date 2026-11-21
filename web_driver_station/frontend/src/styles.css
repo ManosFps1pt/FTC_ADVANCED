@@ -210,12 +210,22 @@ label { display: grid; gap: .35rem; font-size: .8rem; font-weight: 700; color: #
 .debug-warning { border-color: #957133; color: #ffe2a3; background: #3b2d15; }
 .debug-error { margin: .8rem 0; padding: .75rem .85rem; border: 1px solid #b34d5a; border-radius: 8px; color: #ffd9dd; background: #401d28; line-height: 1.45; }
 .debug-error strong { color: #ff9da8; }.debug-error code { margin-left: .45rem; color: #ffb6bd; font: .72rem ui-monospace, monospace; }
-.recording-modal::backdrop { background: rgb(1 8 18 / .78); backdrop-filter: blur(4px); }
-.recording-modal { width: min(calc(100% - 2rem), 34rem); padding: 1.35rem; color: inherit; border-color: #4b7598; box-shadow: 0 24px 80px rgb(0 0 0 / .5); }
-.recording-field { display: grid; gap: .35rem; margin: .75rem 0; font-weight: 700; }
-.recording-field input, .recording-field textarea { width: 100%; padding: .6rem .75rem; color: inherit; background: #081728; border: 1px solid #4b7598; border-radius: 8px; font: inherit; font-weight: 400; }
-.recording-field textarea { resize: vertical; }
-.recording-modal h2 { margin-bottom: .7rem; color: #f1f8ff; font-size: 1.35rem; }.recording-modal p { color: #b9c9d9; line-height: 1.5; }.recording-session-id { display: block; margin: 1rem 0; padding: .65rem .75rem; overflow-wrap: anywhere; color: #9de6c4; background: #081728; border: 1px solid #294865; border-radius: 8px; font-size: .72rem; }.recording-modal-error { color: #ffb4bb !important; }.recording-modal-actions { display: flex; justify-content: flex-end; gap: .6rem; flex-wrap: wrap; margin-top: 1.1rem; }.recording-modal-actions button { min-width: 9rem; }
+.local-recordings { display: grid; gap: .65rem; padding: .8rem 1rem; }
+.recordings-heading, .local-recordings li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .6rem 1rem; }
+.recordings-heading h2 { margin: 0; font-size: 1rem; }
+.local-recordings small { display: block; margin-top: .15rem; color: #a7c0d7; }
+.local-recordings small[role="alert"] { color: #ffb4bb; }
+.local-recordings ul { margin: 0; padding: 0; list-style: none; }
+.local-recordings li { padding: .55rem 0; border-top: 1px solid #294865; }
+.local-recordings details > summary { width: fit-content; cursor: pointer; color: #a7c0d7; }
+.recording-actions, .recording-findings { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem; }
+.recording-findings { width: 100%; }
+.recording-quality, .recording-manage { width: 100%; }
+.recording-manage form, .recording-manage label { display: grid; gap: .35rem; }
+.recording-manage form { max-width: 38rem; gap: .6rem; }
+.recording-manage textarea { resize: vertical; color: inherit; background: #081728; border: 1px solid #4b7598; border-radius: .4rem; padding: .45rem .65rem; }
+.recording-findings a { padding: .3rem .6rem; background: #102b46; border-radius: .35rem; }
+.local-recordings a { color: #8bd3ff; padding-inline: .45rem; }
 .debug-tool-meta { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; color: #9eb4c8; font-size: .75rem; }
 .debug-tool-meta span { padding: .4rem .55rem; border: 1px solid #284767; border-radius: 6px; background: #091a2f; }
 .motor-control-card { max-width: 38rem; padding: 1rem; border: 1px solid #2d5170; border-radius: 12px; background: #0a1b2f; }
@@ -256,7 +266,6 @@ label { display: grid; gap: .35rem; font-size: .8rem; font-weight: 700; color: #
 .direct-camera-preview { margin: .65rem 0; overflow: hidden; border: 1px solid #315a78; border-radius: 9px; background: #030a11; }
 .direct-camera-preview .panel-heading { padding: .45rem .6rem; margin: 0; border-bottom: 1px solid #294865; background: #081728; }.direct-camera-preview .panel-heading h3 { font-size: .88rem; }.direct-camera-preview .panel-heading span { color: #92e5bd; font-size: .6rem; font-weight: 850; }.direct-camera-preview img { display: block; width: min(100%, 240px); min-height: 8rem; object-fit: contain; image-rendering: auto; }.direct-camera-preview .empty-state { min-height: 8rem; margin: 0; padding: .8rem; }
 .direct-preview-actions { justify-content: flex-end; margin-top: -.1rem; }
-.camera-upload-status { display: grid; grid-template-columns: auto 1fr; gap: .18rem .55rem; margin: .55rem 0; padding: .5rem .6rem; border: 1px solid #36536b; border-radius: 7px; color: #b9c9d9; background: #081728; font-size: .65rem; }.camera-upload-status strong { color: #d8ebf8; text-transform: uppercase; }.camera-upload-status span { overflow: hidden; color: #9de6c4; font-family: ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }.camera-upload-status small { grid-column: 1 / -1; color: #9fb1c3; }.camera-upload-status.upload-uploading { border-color: #4186c2; }.camera-upload-status.upload-waiting_for_video { border-color: #a88a3e; }.camera-upload-status.upload-error { border-color: #b34d5a; }.camera-upload-status.upload-error strong { color: #ffabb3; }.upload-progress { position: relative; grid-column: 1 / -1; height: 1.2rem; overflow: hidden; border: 1px solid #3676ab; border-radius: 5px; background: #04101d; }.upload-progress-fill { height: 100%; background: linear-gradient(90deg, #2875b5, #56b8ee); transition: width .2s ease-out; }.upload-progress span { position: absolute; inset: 0; display: grid; place-items: center; overflow: visible; color: #eff9ff; font-size: .58rem; font-weight: 800; text-shadow: 0 1px 2px #00101d; }
 .adb-device-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: .55rem; }
 .adb-device-card { min-width: 0; padding: .6rem .7rem; border: 1px solid #294865; border-radius: 9px; background: #091a2f; }
 .adb-device-card.role-camera { border-color: #2f9768; background: rgb(15 92 63 / .2); }

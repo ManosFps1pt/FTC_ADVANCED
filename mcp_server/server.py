@@ -1,16 +1,18 @@
-"""Streamable HTTP MCP server for the bounded FTC Advanced debugger surface."""
+"""Streamable HTTP MCP server for FTC Advanced Driver Station tools."""
 
 from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
+from pydantic import Field
 
 from .backend_client import BackendError, DriverStationApi
+from .replay_tools import register_replay_tools
 
 
 logging.basicConfig(level=os.getenv("FTC_ADVANCED_MCP_LOG_LEVEL", "INFO"), format="%(levelname)s %(message)s")
@@ -41,21 +43,21 @@ _mcp_port = int(os.getenv("FTC_ADVANCED_MCP_PORT", "8001"))
 mcp = FastMCP(
     "FTC Advanced",
     instructions=(
-        "You can observe the live FTC Advanced Driver Station, launch an exact "
-        "OpMode advertised by the connected Robot Controller, and control only "
-        "its registered free-spin debugger tools. Use debugger discovery before "
-        "selecting a tool or actuating a motor. Never use these tools for "
-        "drivetrain or mechanism actuation. Motor power is limited to ±0.35 and "
-        "automatically expires after at most 500 ms."
+        "You can observe the live FTC Advanced Driver Station, list local recording "
+        "sessions, and launch an exact OpMode advertised by the connected Robot "
+        "Controller. Use debugger discovery before selecting a registered free-spin "
+        "tool. Direct motor power is limited to ±0.35 for at most 500 ms. The v3 "
+        "backend requires an operator lease and arming for motor power and benchmark "
+        "starts. Use the Web Driver Station for those v3 operations."
     ),
     host=_mcp_host,
     port=_mcp_port,
     transport_security=_transport_security(),
 )
 
-READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 DEBUGGER_CONTROL = ToolAnnotations(
-    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
+    readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
 )
 DEBUGGER_OPMODE_NAME = "FTC Advanced Debugger"
 FREE_SPIN_RISK_CLASS = "debug_free_spin"
@@ -66,7 +68,6 @@ def _api() -> DriverStationApi:
     return DriverStationApi()
 
 
-@mcp.tool(title="Driver Station status", annotations=READ_ONLY)
 async def get_driver_station_status() -> dict[str, Any]:
     """Return concise connection and OpMode status from the Driver Station."""
 
@@ -82,7 +83,6 @@ async def get_driver_station_status() -> dict[str, Any]:
     }
 
 
-@mcp.tool(title="Robot data TCP status", annotations=READ_ONLY)
 async def get_robot_data_status() -> dict[str, Any]:
     """Return concise status for the robot's structured telemetry TCP stream."""
 
@@ -100,11 +100,11 @@ async def get_robot_data_status() -> dict[str, Any]:
             "activeLogCount": recording.get("active_log_count", 0),
             "activeSessions": recording.get("active_sessions", []),
             "lastError": recording.get("last_error"),
+            "uploadConfigured": recording.get("upload_configured"),
         } if isinstance(recording, dict) else None,
     }
 
 
-@mcp.tool(title="Telemetry status", annotations=READ_ONLY)
 async def get_telemetry_status() -> dict[str, Any]:
     """Return the current telemetry session summary without samples or history."""
 
@@ -127,6 +127,7 @@ async def get_latest_telemetry_snapshot() -> dict[str, Any]:
         "session": state.get("session"),
         "snapshot": state.get("snapshot"),
         "recentEvents": state.get("recentEvents", []),
+        "capture": state.get("capture"),
     }
 
 
@@ -138,6 +139,35 @@ async def get_telemetry_catalog() -> dict[str, Any]:
     assert isinstance(state, dict)
     catalog = state.get("catalog")
     return {"session": state.get("session"), "catalog": catalog}
+
+
+@mcp.tool(title="List local recording sessions", annotations=READ_ONLY)
+async def list_recording_sessions(
+    offset: Annotated[int, Field(ge=0)] = 0,
+    limit: Annotated[int, Field(ge=1, le=50)] = 20,
+) -> dict[str, Any]:
+    """List a page of local Driver Station recordings in backend order.
+
+    Includes session IDs and counts of finalized and partial raw logs. Partial
+    logs can belong to an active or interrupted recording. Pass nextOffset as
+    offset to continue.
+    """
+
+    sessions = await _api().get("/api/data/recordings")
+    assert isinstance(sessions, list)
+    end = offset + limit
+    return {
+        "sessions": [
+            {
+                "sessionId": session["session_id"],
+                "finalizedLogCount": len(session["logs"]),
+                "partialLogCount": len(session["partial_logs"]),
+            }
+            for session in sessions[offset:end]
+        ],
+        "totalSessions": len(sessions),
+        "nextOffset": end if end < len(sessions) else None,
+    }
 
 
 @mcp.tool(title="Debugger status", annotations=READ_ONLY)
@@ -241,12 +271,15 @@ async def stop_opmode() -> dict[str, Any]:
 
 @mcp.tool(title="Discover Debugger functionality", annotations=READ_ONLY)
 async def discover_debugger_functionality() -> dict[str, Any]:
-    """List the live debugger tree, selected-tool schema, safety state, and benchmark inputs."""
+    """List robot sessions, lease state, the debugger tree, tool schema and safety state."""
 
     status = await _api().get("/api/debug/status")
     assert isinstance(status, dict)
     return {
         "connected": status.get("connected"),
+        "selectedSession": status.get("selected_session"),
+        "sessions": status.get("sessions", []),
+        "controlOwned": status.get("control_owned"),
         "manifest": status.get("manifest"),
         "selectedTool": status.get("tool_ready"),
         "toolState": status.get("tool_state"),
@@ -397,8 +430,34 @@ async def get_friction_benchmark_result(run_id: str) -> dict[str, Any]:
     }
 
 
+def _register_status_tools(server: FastMCP) -> None:
+    server.add_tool(get_driver_station_status, title="Driver Station status", annotations=READ_ONLY)
+    server.add_tool(get_robot_data_status, title="Robot data TCP status", annotations=READ_ONLY)
+    server.add_tool(get_telemetry_status, title="Telemetry status", annotations=READ_ONLY)
+
+
+_register_status_tools(mcp)
+register_replay_tools(mcp)
+
+
+def create_replay_server() -> FastMCP:
+    server = FastMCP(
+        "FTC Advanced Replay Analysis",
+        instructions=(
+            "Read live Driver Station connection and telemetry status, and analyze saved FTC recordings. "
+            "Use list_replays to resolve session IDs, check capture quality, then use event and signal tools. "
+            "Replay timestamps are elapsed from the first telemetry sample."
+        ),
+        host=_mcp_host, port=_mcp_port, transport_security=_transport_security(),
+    )
+    _register_status_tools(server)
+    register_replay_tools(server)
+    return server
+
+
 def main() -> None:
     """Start the Streamable HTTP endpoint used by a remote MCP client."""
 
-    logger.info("Starting FTC Advanced MCP server on %s:%s/mcp", _mcp_host, _mcp_port)
-    mcp.run(transport="streamable-http")
+    server = create_replay_server() if os.getenv("FTC_ADVANCED_MCP_REPLAY_ONLY") == "1" else mcp
+    logger.info("Starting %s on %s:%s/mcp", server.name, _mcp_host, _mcp_port)
+    server.run(transport="streamable-http")

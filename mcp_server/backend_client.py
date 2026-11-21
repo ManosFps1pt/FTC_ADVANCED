@@ -35,9 +35,15 @@ class DriverStationApi:
     async def post(self, path: str, body: dict[str, Any]) -> dict[str, Any] | list[Any]:
         return await self._request("POST", path, json=body)
 
-    async def _request(
+    async def get_png(self, path: str) -> bytes:
+        response = await self._response("GET", path)
+        if response.headers.get("content-type") != "image/png" or len(response.content) > 4 * 1024**2:
+            raise BackendError("Backend returned an invalid or oversized PNG")
+        return response.content
+
+    async def _response(
         self, method: str, path: str, *, json: dict[str, Any] | None = None
-    ) -> dict[str, Any] | list[Any]:
+    ) -> httpx.Response:
         try:
             async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_s) as client:
                 response = await client.request(method, path, json=json)
@@ -58,7 +64,12 @@ class DriverStationApi:
                 f"Backend {method} {path} failed with HTTP {response.status_code}: {detail}",
                 status_code=response.status_code,
             )
+        return response
 
+    async def _request(
+        self, method: str, path: str, *, json: dict[str, Any] | None = None
+    ) -> dict[str, Any] | list[Any]:
+        response = await self._response(method, path, json=json)
         try:
             payload = response.json()
         except ValueError as error:

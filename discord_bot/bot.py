@@ -8,12 +8,14 @@ for robot control in this first release.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any
-from urllib.parse import urljoin
+from typing import Any, Literal
+from urllib.parse import urlencode, urljoin
+from uuid import UUID
 
 import aiohttp
 import discord
@@ -90,18 +92,22 @@ class DriverStationApi:
             await self._session.close()
             self._session = None
 
-    async def get(self, path: str) -> Any:
+    async def get(self, path: str, *, png: bool = False, timeout: int = 8) -> Any:
         if self._session is None:
             raise RuntimeError("Driver Station API client was not started")
         url = urljoin(self._base_url, path.lstrip("/"))
         try:
-            async with self._session.get(url) as response:
+            async with self._session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
                 if response.status >= 400:
                     detail = await response.text()
                     raise BackendError(f"Driver Station returned {response.status}: {_shorten(detail, 200)}")
+                if png:
+                    if response.content_type != "image/png" or (response.content_length or 0) > 4 * 1024**2:
+                        raise BackendError("The backend did not return a usable plot")
+                    return await response.read()
                 return await response.json(content_type=None)
         except asyncio.TimeoutError as error:
-            raise BackendError("Driver Station did not respond within 8 seconds") from error
+            raise BackendError(f"Driver Station did not respond within {timeout} seconds") from error
         except aiohttp.ClientError as error:
             raise BackendError("Cannot reach the Driver Station backend") from error
 
@@ -113,6 +119,33 @@ def _shorten(value: object, limit: int = MAX_DISCORD_FIELD) -> str:
 
 def _json(value: object, limit: int = MAX_DISCORD_FIELD) -> str:
     return _shorten(json.dumps(value, ensure_ascii=False, indent=2, default=str), limit)
+
+
+def _recording_line(run: dict) -> str:
+    title = discord.utils.escape_markdown(run["title"])
+    state = run["upload"]["state"].replace("_", " ")
+    return f"**{title}** · {state}\n`{run['session_id']}`"
+
+
+def _event_time(seconds: float) -> str:
+    minutes, remainder = divmod(round(seconds * 1000), 60_000)
+    return f"{minutes:02d}:{remainder / 1000:06.3f}"
+
+
+def _event_line(preset: str, event: dict, hosted_url: str) -> str:
+    timestamp = _event_time(event["t_s"])
+    if hosted_url:
+        query = event["replay_path"].partition("?")[2]
+        timestamp = f"[{timestamp}]({hosted_url.rstrip('/')}/?{query})"
+    if preset == "shooter":
+        recovery = event["trough_to_recovery_s"]
+        detail = f"{round(event['drop_rpm'])} RPM drop · {round(event['target_rpm'])} RPM target"
+        detail += f" · {recovery:.2f} s to recover" if recovery is not None else " · recovery unobserved"
+    elif preset == "voltage":
+        detail = f"{event['min_v']:.2f} V minimum · {event['minimum_duration_s']:.2f} s"
+    else:
+        detail = f"{event['peak_a']:.2f} A peak · {event['minimum_duration_s']:.2f} s"
+    return f"**{timestamp}** · {detail}"
 
 
 def _has_viewer_access(interaction: discord.Interaction, allowed_roles: frozenset[int]) -> bool:
@@ -129,7 +162,7 @@ class FtcDiscordBot(discord.Client):
         # Guilds is a normal, non-privileged intent. It is sufficient for
         # guild slash commands; message-content and member intents stay off.
         intents.guilds = True
-        super().__init__(intents=intents)
+        super().__init__(intents=intents, allowed_mentions=discord.AllowedMentions.none())
         self.settings = settings
         self.api = DriverStationApi(settings.api_base)
         self.tree = app_commands.CommandTree(self)
@@ -239,14 +272,14 @@ class FtcDiscordBot(discord.Client):
                 return
             await interaction.response.defer(ephemeral=EPHEMERAL, thinking=True)
             try:
-                recordings = await self.api.get("/api/data/recordings")
+                recordings = (await self.api.get("/api/reviews?limit=1"))["runs"]
             except BackendError as error:
                 await self._respond_backend_error(interaction, error)
                 return
             if not isinstance(recordings, list) or not recordings:
                 await interaction.followup.send("No completed recordings are available.", ephemeral=EPHEMERAL)
                 return
-            await interaction.followup.send(f"```json\n{_json(recordings[0])}\n```", ephemeral=EPHEMERAL)
+            await interaction.followup.send(_recording_line(recordings[0]), ephemeral=EPHEMERAL)
 
         @self.recording.command(name="list", description="List recent completed recordings")
         @app_commands.describe(limit="Number of recordings to show (1–10)")
@@ -255,19 +288,56 @@ class FtcDiscordBot(discord.Client):
                 return
             await interaction.response.defer(ephemeral=EPHEMERAL, thinking=True)
             try:
-                recordings = await self.api.get("/api/data/recordings")
+                recordings = (await self.api.get(f"/api/reviews?limit={limit}"))["runs"]
             except BackendError as error:
                 await self._respond_backend_error(interaction, error)
                 return
             if not isinstance(recordings, list) or not recordings:
                 await interaction.followup.send("No completed recordings are available.", ephemeral=EPHEMERAL)
                 return
-            summary = []
-            for index, recording in enumerate(recordings[:limit], start=1):
-                if not isinstance(recording, dict):
-                    continue
-                summary.append(f"{index}. `{recording.get('session_id', recording.get('id', 'unknown'))}` — {_shorten(recording.get('state', 'unknown'), 80)}")
-            await interaction.followup.send("\n".join(summary) or "No readable recordings are available.", ephemeral=EPHEMERAL)
+            await interaction.followup.send("\n".join(_recording_line(run) for run in recordings), ephemeral=EPHEMERAL)
+
+        @self.recording.command(name="analyze", description="Find events and show a graph for a saved recording")
+        @app_commands.describe(run="latest or the session ID shown by /recording list")
+        async def recording_analyze(
+            interaction: discord.Interaction, run: str = "latest",
+            preset: Literal["shooter", "voltage", "intake"] = "shooter",
+        ) -> None:
+            if not await self._authorize(interaction):
+                return
+            await interaction.response.defer(ephemeral=EPHEMERAL, thinking=True)
+            try:
+                session = "" if run == "latest" else str(UUID(run))
+            except ValueError:
+                await interaction.followup.send("Enter latest or a session ID from /recording list.", ephemeral=EPHEMERAL)
+                return
+            event_kind = {"shooter": "shooter_dips", "voltage": "voltage_sags", "intake": "intake_loads"}[preset]
+            try:
+                recordings = (await self.api.get(f"/api/reviews?{urlencode({'search': session, 'limit': 1})}"))["runs"]
+                if not recordings or (session and recordings[0]["session_id"] != session):
+                    raise BackendError("No matching finalized recording is available")
+                recording = recordings[0]
+                session = recording["session_id"]
+                result = await self.api.get(f"/api/reviews/{session}/events/{event_kind}?limit=5", timeout=30)
+            except BackendError as error:
+                await self._respond_backend_error(interaction, error)
+                return
+            hosted_url = os.getenv("FTC_RECORDING_VIEWER_URL", "") if recording["upload"]["state"] == "uploaded" else ""
+            lines = [_recording_line(recording)]
+            if result["missing_signals"]:
+                lines.append(f"Analysis needs usable samples for {', '.join(result['missing_signals'])}.")
+            else:
+                lines.append(f"{result['total']} {event_kind.replace('_', ' ')} detected.")
+            lines.extend(_event_line(preset, event, hosted_url) for event in result["events"])
+            files = []
+            plot = "shooter" if preset == "shooter" else "electrical"
+            if result["events"]:
+                try:
+                    image = await self.api.get(f"/api/reviews/{session}/plot/{plot}", png=True, timeout=45)
+                    files.append(discord.File(io.BytesIO(image), filename=f"{plot}.png"))
+                except BackendError:
+                    lines.append("Plot unavailable for this recording.")
+            await interaction.followup.send("\n".join(lines), files=files, ephemeral=EPHEMERAL)
 
 
 def main() -> None:

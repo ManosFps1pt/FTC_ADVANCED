@@ -8,6 +8,8 @@ receives telemetry/status events over a WebSocket.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import os
 import platform
 import secrets
@@ -29,6 +31,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from recording_viewer.backend.main import create_library_app
 from ftc_control_hub import (
     ControlHubClient,
     ControlHubConfig,
@@ -50,6 +53,8 @@ from .incidents import IncidentError, IncidentRecorder
 from .broadcast import BrowserBroadcast
 from .recording_metadata import RECORDING_METADATA_FILE, RecordingMetadata
 from .recording_uploader import RecordingUploadError, RecordingUploader, UploadSettings
+from .review_api import review_routes
+from .saved_runs import saved_runs
 from .video_recorder import CameraRecordingConfig, VideoRecorder, VideoRecorderError
 from .adb_camera import AdbCameraError, AdbCameraService
 from .camera_recording import CameraRecordingCoordinator, CameraRecordingError
@@ -143,7 +148,11 @@ class TelemetryCaptureRequest(BaseModel):
 
 
 class RecordingUploadRequest(RecordingMetadata):
+    description: str = Field(min_length=1, max_length=4000)
     keep_local: bool = False
+
+    # Preserve validation for clients of the explicit upload endpoint.
+    model_config = {"str_strip_whitespace": True}
 
 
 class AdbDeviceRoleRequest(BaseModel):
@@ -513,6 +522,8 @@ class RobotDataService:
         self._incident_recorder = IncidentRecorder(recordings_root)
         self._recording_uploader: RecordingUploader | None = None
         self._upload_states: dict[str, dict[str, Any]] = {}
+        self._upload_queue: dict[str, dict[str, str]] = {}
+        self._queue_task: asyncio.Task | None = None
         self._raw_finalized: set[str] = set()
         self._video_errors: dict[str, str] = {}
         self._video_ready_checker: Callable[[str], bool] = lambda _session_id: True
@@ -530,6 +541,20 @@ class RobotDataService:
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         await self._server.start()
+        queue_path = self.recordings_root / ".upload-queue.json"
+        try:
+            queue = json.loads(queue_path.read_text(encoding="utf-8"))
+            if not isinstance(queue, dict) or any(
+                not isinstance(item, dict) or item.get("state") not in ("queued", "uploaded", "failed")
+                for item in queue.values()
+            ):
+                raise ValueError("Invalid upload queue")
+            self._upload_queue = queue
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError):
+            logging.exception("Could not read recording upload queue")
+        self._start_upload_queue()
 
     def set_capture_callbacks(
         self,
@@ -557,6 +582,9 @@ class RobotDataService:
         await self._prepare_upload_decision(session_id)
 
     async def close(self) -> None:
+        if self._queue_task is not None:
+            self._queue_task.cancel()
+            await asyncio.gather(self._queue_task, return_exceptions=True)
         await self._browser_broadcast.close()
         await self._server.close()
         if self._capture_override_session_id is not None:
@@ -887,8 +915,128 @@ class RobotDataService:
         debugger_ids = {r["runId"] for r in self._debug_results.list()}
         return [r for r in self._raw_recorder.list_sessions() if r["session_id"] not in debugger_ids]
 
+    def review_exclusions(self) -> set[str]:
+        excluded = set(self._raw_recorder.status()["active_sessions"])
+        excluded.update(r["runId"] for r in self._debug_results.list())
+        return excluded
+
+    @property
+    def recording_upload_configured(self) -> bool:
+        return self._recording_uploader is not None
+
+    def saved_recording_sessions(self) -> list[dict]:
+        runs = saved_runs(self.recordings_root, self.review_exclusions())
+        for run in runs:
+            session_id = run["session_id"]
+            upload = self._upload_states.get(session_id, {})
+            queued = self._upload_queue.get(session_id, {})
+            state = upload.get("state")
+            if state in {"uploading", "retrying", "deleting"}:
+                run["upload"] = upload
+            elif state == "complete" or queued.get("state") == "uploaded":
+                run["upload"] = {"state": "uploaded"}
+            else:
+                run["upload"] = queued or {"state": "local"}
+            run["video_finalizing"] = not self._video_ready_checker(session_id)
+            run["video_warning"] = self._video_errors.get(session_id)
+        return runs
+
+    def check_recording_edit(self, session_id: str, *, editing_notes: bool = False) -> None:
+        queue_state = self._upload_queue.get(session_id, {}).get("state")
+        upload_state = self._upload_states.get(session_id, {}).get("state")
+        if (queue_state == "queued" or upload_state in {"uploading", "retrying", "deleting"}
+                or not self._video_ready_checker(session_id)):
+            raise RecordingUploadError("Wait for recording and upload activity to finish")
+        if editing_notes and (queue_state == "uploaded" or upload_state == "complete"
+                              or self._upload_states.get(session_id, {}).get("metadata") is not None):
+            raise RecordingUploadError("Recording details are locked after an upload starts")
+
+    async def delete_saved_recording(self, session_id: str) -> None:
+        self.check_recording_edit(session_id)
+        previous = self._upload_states.get(session_id)
+        self._upload_states[session_id] = {"state": "deleting"}
+        try:
+            await asyncio.to_thread(self._raw_recorder.delete_session, session_id)
+        except FtcLogError:
+            if previous is None:
+                self._upload_states.pop(session_id, None)
+            else:
+                self._upload_states[session_id] = previous
+            raise
+        self._upload_states.pop(session_id, None)
+        if session_id in self._upload_queue:
+            self._save_upload_queue({key: item for key, item in self._upload_queue.items() if key != session_id})
+
+    def _save_upload_queue(self, queue: dict) -> None:
+        self.recordings_root.mkdir(parents=True, exist_ok=True)
+        atomic_json(self.recordings_root / ".upload-queue.json", queue)
+        self._upload_queue = queue
+
+    def queue_uploads(self, runs: list[dict]) -> dict:
+        if self._recording_uploader is None:
+            raise RecordingUploadError("Recording upload is not configured on this laptop")
+        pending = [
+            run["session_id"] for run in runs
+            if run["upload"]["state"] in {"local", "failed"}
+            and self._upload_queue.get(run["session_id"], {}).get("state") != "queued"
+            and self._upload_states.get(run["session_id"], {}).get("state")
+            not in {"uploading", "retrying", "deleting", "complete"}
+        ]
+        if pending:
+            self._save_upload_queue({
+                **self._upload_queue, **{session: {"state": "queued"} for session in pending},
+            })
+        self._start_upload_queue()
+        return {"queued": len(pending)}
+
+    def _start_upload_queue(self) -> None:
+        if (self._recording_uploader is not None
+                and (self._queue_task is None or self._queue_task.done())
+                and any(item["state"] == "queued" for item in self._upload_queue.values())):
+            self._queue_task = asyncio.create_task(self._run_upload_queue(), name="recording-upload-queue")
+
+    async def _run_upload_queue(self) -> None:
+        while pending := [key for key, item in self._upload_queue.items() if item["state"] == "queued"]:
+            runs = {run["session_id"]: run for run in await asyncio.to_thread(self.saved_recording_sessions)}
+            for session_id in pending:
+                run = runs.get(session_id)
+                if run is None:
+                    self._update_queue_entry(session_id, "failed", "Finalized recording is unavailable")
+                    continue
+                if run["video_finalizing"] or run["upload"]["state"] in {"uploading", "retrying"}:
+                    continue
+                if run["upload"]["state"] == "uploaded":
+                    self._update_queue_entry(session_id, "uploaded")
+                    continue
+                if self._upload_states.get(session_id, {}).get("state") in {None, "waiting_for_video"}:
+                    self._upload_states[session_id] = {"state": "ready_to_upload"}
+                try:
+                    result = await self.upload_recording(
+                        session_id, metadata=RecordingMetadata(title=run["title"], description=run["description"]),
+                        keep_local=True, wait=True,
+                    )
+                except (FtcLogError, RecordingUploadError) as error:
+                    self._update_queue_entry(session_id, "failed", str(error))
+                    continue
+                if result["state"] == "complete":
+                    self._update_queue_entry(session_id, "uploaded")
+                elif result.get("transient"):
+                    self._update_queue_entry(session_id, "queued", "Waiting for the upload server")
+                    break
+                else:
+                    self._update_queue_entry(session_id, "failed", result.get("detail", "Upload failed"))
+            if any(item["state"] == "queued" for item in self._upload_queue.values()):
+                await asyncio.sleep(15)
+
+    def _update_queue_entry(self, session_id: str, state: str, detail: str = "") -> None:
+        entry = {"state": state, "detail": detail}
+        self._save_upload_queue({**self._upload_queue, session_id: entry})
+
     def recording_path(self, session_id: str, log_name: str) -> Path:
         return self._raw_recorder.log_path(session_id, log_name)
+
+    def recording_directory(self, session_id: str) -> Path:
+        return self._raw_recorder.session_path(session_id)
 
     @property
     def recordings_root(self) -> Path:
@@ -1178,7 +1326,7 @@ class RobotDataService:
         await self._broadcast_status()
 
     async def upload_recording(
-        self, session_id: str, *, metadata: RecordingMetadata, keep_local: bool = False
+        self, session_id: str, *, metadata: RecordingMetadata, keep_local: bool = False, wait: bool = False
     ) -> dict[str, Any]:
         if self._recording_uploader is None:
             raise RecordingUploadError("Recording upload is not configured on this laptop")
@@ -1254,7 +1402,10 @@ class RobotDataService:
                             or not _is_transient_upload_error(error)):
                         # The finalized local session remains untouched, so a
                         # terminal failure can still be retried manually.
-                        self._upload_states[session_id] = {"state": "error", "detail": str(error), "metadata": notes}
+                        self._upload_states[session_id] = {
+                            "state": "error", "detail": str(error), "metadata": notes,
+                            "transient": _is_transient_upload_error(error),
+                        }
                         await self._broadcast_status()
                         return
                     delay = self._AUTO_UPLOAD_RETRY_DELAYS_SECONDS[attempt]
@@ -1268,6 +1419,9 @@ class RobotDataService:
                     self._upload_states[session_id] = {"state": "uploading", "detail": f"Retry {attempt} started"}
                     await self._broadcast_status()
 
+        if wait:
+            await upload()
+            return self._upload_states[session_id]
         asyncio.create_task(upload(), name=f"upload-recording-{session_id}")
         return {"session_id": session_id, "state": "uploading"}
 
@@ -1418,6 +1572,17 @@ def _is_transient_upload_error(error: RecordingUploadError | OSError) -> bool:
         "timed out",
         "eof during negotiation",
         "no existing session",
+        "unable to connect",
+        "network is unreachable",
+        "unreachable network",
+        "network is down",
+        "no route to host",
+        "getaddrinfo failed",
+        "temporary failure in name resolution",
+        "actively refused",
+        "connection was aborted",
+        "broken pipe",
+        "network location cannot be reached",
     ))
 
 
@@ -1886,6 +2051,11 @@ async def debug_websocket(socket: WebSocket) -> None:
     except WebSocketDisconnect:
         robot_data_service.remove_debug_socket(socket)
 
+
+app.include_router(review_routes(robot_data_service))
+app.mount("/replays", create_library_app(
+    robot_data_service.recordings_root, excluded=robot_data_service.review_exclusions,
+), name="local-replay")
 
 frontend_dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 if frontend_dist.is_dir():

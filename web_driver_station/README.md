@@ -141,10 +141,10 @@ Camera capture starts before the telemetry protocol supplies its UUID, so it
 uses a private staging folder briefly. The first raw telemetry packet binds the
 video to `recordings/<telemetry-session-uuid>/video/`; the raw log, video,
 manifest, and frame maps are ready to upload once both are finalized. The
-Driver Station prompts for a title and description before either upload option.
-The recorder library shows both alongside the replay. You can keep the laptop
-copy or have it removed after a successful upload. Failed uploads keep the
-local artifacts and recording details for retry. If no telemetry session
+**Recordings** panel shows the local replay and can find shooter dips, voltage
+sags, and intake load events while the camera finishes. At the end of the lab,
+**Upload pending** queues the sessions on disk and keeps the laptop copies.
+Failed transfers retain the raw data and video. If no telemetry session
 arrives, the staged video is preserved and the camera panel reports its
 recovery path.
 

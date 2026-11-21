@@ -5,12 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import uuid
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -304,7 +305,7 @@ def create_app(recording_directory: Path) -> FastAPI:
     return app
 
 
-def create_library_app(recordings_root: Path) -> FastAPI:
+def create_library_app(recordings_root: Path, *, excluded: Callable[[], set[str]] | None = None) -> FastAPI:
     """Serve an index of completed recordings and load one on demand."""
 
     library = RecordingLibrary(recordings_root)
@@ -319,7 +320,13 @@ def create_library_app(recordings_root: Path) -> FastAPI:
 
     def get_recording_path(session_id: str) -> Path:
         try:
-            return library.recording_path(session_id)
+            path = library.recording_path(session_id)
+            if excluded is not None:
+                from web_driver_station.backend.saved_runs import saved_streams
+
+                if path.name in excluded() or not saved_streams(path):
+                    raise RecordingLoadError("Recording is not finalized")
+            return path
         except RecordingLoadError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
@@ -329,24 +336,36 @@ def create_library_app(recordings_root: Path) -> FastAPI:
         except RecordingLoadError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
-    def library_model(session_id: str, *, summary_only: bool = False) -> dict[str, Any]:
+    def library_model(session_id: str, root_path: str, *, summary_only: bool = False) -> dict[str, Any]:
         recording = get_recording(session_id)
         model = recording.summary() if summary_only else recording.browser_model()
         for clip in model["videoClips"]:
-            clip["url"] = f"/api/recordings/{session_id}/video/{clip['index']}"
+            clip["url"] = f"{root_path}/api/recordings/{session_id}/video/{clip['index']}"
         return model
 
     @app.get("/api/recordings")
     def list_recordings() -> list[dict[str, Any]]:
-        return library.list()
+        if excluded is None:
+            return library.list()
+        from web_driver_station.backend.saved_runs import saved_runs
+
+        return [{
+            "id": item["session_id"],
+            "metadata": {"title": item["title"], "description": item["description"]},
+            "modifiedAtNs": str(int(datetime.fromisoformat(item["captured_at"]).timestamp() * 1e9)),
+            "logFileCount": len(item["logs"]) + len(item["partial_logs"]),
+            "interrupted": item["interrupted"],
+            "sizeBytes": item["size_bytes"],
+            "videoFileCount": len(original_videos(recordings_root / item["session_id"])),
+        } for item in saved_runs(recordings_root, excluded())]
 
     @app.get("/api/recordings/{session_id}")
-    def get_library_recording(session_id: str) -> dict[str, Any]:
-        return library_model(session_id)
+    def get_library_recording(session_id: str, request: Request) -> dict[str, Any]:
+        return library_model(session_id, request.scope.get("root_path", ""))
 
     @app.get("/api/recordings/{session_id}/summary")
-    def get_library_recording_summary(session_id: str) -> dict[str, Any]:
-        return library_model(session_id, summary_only=True)
+    def get_library_recording_summary(session_id: str, request: Request) -> dict[str, Any]:
+        return library_model(session_id, request.scope.get("root_path", ""), summary_only=True)
 
     @app.get("/api/recordings/{session_id}/video/{index}")
     def get_library_recording_video(session_id: str, index: int) -> FileResponse:
@@ -357,7 +376,7 @@ def create_library_app(recordings_root: Path) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(error)) from error
         return FileResponse(path, media_type="video/mp4", filename=path.name)
 
-    app.include_router(video_job_routes(get_recording_path, lambda session_id: Recording(library.recording_path(session_id))),
+    app.include_router(video_job_routes(get_recording_path, get_recording),
                        prefix="/api/recordings")
     _mount_frontend(app)
     return app

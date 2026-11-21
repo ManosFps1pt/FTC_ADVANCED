@@ -1,3 +1,4 @@
+run_ftc_stack.sh text eol=lf
 protocol/*.proto text eol=lf
 protocol/*.sha256 text eol=lf
 web_driver_station/backend/protocol/*_pb2.py text eol=lf

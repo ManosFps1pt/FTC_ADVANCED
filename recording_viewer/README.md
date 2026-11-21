@@ -4,6 +4,10 @@ This is a separate, local React/TypeScript replay app for one saved FTC robot
 data session. It reads `.ftclog` files directly; it does not connect to a
 Control Hub or require the Driver Station to be running.
 
+The Driver Station also serves its saved local sessions at
+<http://127.0.0.1:8000/replays/>. A replay URL can include `t` in seconds
+from the first sample alongside the `recording` session ID.
+
 From the repository root, build the frontend once:
 
 ```powershell

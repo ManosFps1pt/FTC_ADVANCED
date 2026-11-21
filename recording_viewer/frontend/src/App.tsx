@@ -326,15 +326,24 @@ function RecordingApp() {
   const { overlays, toggleOverlay } = useReplayOverlays();
 
   useEffect(() => {
-    void fetch("/api/recordings").then(async response => { if (!response.ok) throw new Error(await response.text()); return response.json() as Promise<LibraryRecording[]>; }).then(setLibrary).catch(reason => setError(reason instanceof Error ? reason.message : "Could not load recordings"));
+    void fetch("api/recordings").then(async response => { if (!response.ok) throw new Error(await response.text()); return response.json() as Promise<LibraryRecording[]>; }).then(setLibrary).catch(reason => setError(reason instanceof Error ? reason.message : "Could not load recordings"));
   }, []);
   useEffect(() => {
     if (!selectedRecordingId) { setRecording(null); return; }
     const request = new AbortController();
     setError(null); setRecording(null);
-    void fetch(`/api/recordings/${encodeURIComponent(selectedRecordingId)}`, { signal: request.signal })
+    void fetch(`api/recordings/${encodeURIComponent(selectedRecordingId)}`, { signal: request.signal })
       .then(async response => { if (!response.ok) throw new Error(await response.text()); return response.json() as Promise<Recording>; })
-      .then(value => { playhead.current = 0; setPlaybackSeconds(0); setRecording(value); })
+      .then(value => {
+        const target = Number(new URLSearchParams(window.location.search).get("t"));
+        const first = value.snapshots.at(0);
+        const last = value.snapshots.at(-1);
+        const duration = first && last ? (timeNs(last) - timeNs(first)) / 1e9 : 0;
+        const initial = Number.isFinite(target) ? Math.max(0, Math.min(target, duration)) : 0;
+        playhead.current = initial;
+        setPlaybackSeconds(initial);
+        setRecording(value);
+      })
       .catch(reason => { if (!request.signal.aborted) setError(reason instanceof Error ? reason.message : "Could not load recording"); });
     return () => request.abort();
   }, [selectedRecordingId]);
@@ -346,6 +355,7 @@ function RecordingApp() {
     setSelectedVideoIndex(0);
     setSelectedRecordingId(id);
     const url = new URL(window.location.href);
+    url.searchParams.delete("t");
     if (id) url.searchParams.set("recording", id); else url.searchParams.delete("recording");
     window.history.pushState({}, "", url);
   };
@@ -401,7 +411,7 @@ function RecordingApp() {
 
   if (error) return <main className="error"><h1>Could not open recording</h1><pre>{error}</pre>{selectedRecordingId && <button onClick={() => selectRecording(null)}>Back to recordings</button>}</main>;
   if (!selectedRecordingId) return <main className="library">
-    <header className="library-header"><p className="eyebrow">FTC replay library</p><h1>Recordings</h1><p>Select a completed upload to inspect its robot data, controls, and video.</p></header>
+    <header className="library-header"><p className="eyebrow">FTC replay library</p><h1>Recordings</h1><p>Select a recording to inspect its robot data, controls, and video.</p></header>
     {library === null ? <p className="loading">Loading recordings…</p> : library.length ? <section className="recording-grid">
       {library.map(item => <button className="recording-card panel" key={item.id} onClick={() => selectRecording(item.id)}>
         <span className="recording-card-top"><strong>{recordingDate(item.modifiedAtNs)}</strong><small>{item.videoFileCount ? "Video included" : "No video"}</small></span>
@@ -413,7 +423,7 @@ function RecordingApp() {
         <span>{item.logFileCount} log {item.logFileCount === 1 ? "file" : "files"} · {formatBytes(item.sizeBytes)}</span>
         <b>Open replay →</b>
       </button>)}
-    </section> : <section className="empty-library panel"><h2>No recordings yet</h2><p>Finalized sessions will appear here after the laptop uploader finishes.</p></section>}
+    </section> : <section className="empty-library panel"><h2>No recordings yet</h2></section>}
   </main>;
   if (!recording) return <main className="loading">Opening recording…</main>;
   const title = recording.metadata?.title ?? recording.session?.robotName ?? "FTC Recording";

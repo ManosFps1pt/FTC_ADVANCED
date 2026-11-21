@@ -44,8 +44,13 @@ ignored local JSON file and never prints it.
 - `/robot telemetry` — active telemetry session summary.
 - `/robot opmodes` — currently advertised Robot Controller OpModes.
 - `/debugger status` — debugger and safety status.
-- `/recording latest` — newest finalized recording.
-- `/recording list` — recent recordings.
+- `/recording latest` — newest finalized local recording by capture time.
+- `/recording list` — saved runs with OpMode, session ID, and upload state.
+- `/recording analyze` — report shooter dips, voltage sags, or intake loads with elapsed timestamps and a PNG. Choose `latest` or paste the session ID.
 
-All results are ephemeral by default so a technical status check does not flood
-the server. The bot does not need an OpenAI API key.
+Use `FTC_RECORDING_VIEWER_URL` in the bot environment to add direct timestamp
+links for uploaded sessions. Set it to the hosted replay library's base URL.
+Local captures are available to the bot after the laptop regains internet.
+
+Results are posted in the channel where the command is used. The bot does not
+need an OpenAI API key.

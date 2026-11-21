@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RobotConfiguration } from "./RobotConfiguration";
 import { TelemetryDashboard } from "./TelemetryDashboard";
 import { DebuggerPage } from "./DebuggerPage";
+import { RecordingsPanel } from "./RecordingsPanel";
 
 type Status = {
   connected: boolean;
@@ -14,26 +15,13 @@ type Status = {
 
 type PingResult = { latency_ms: number | null };
 
-type RecordingMetadata = { title: string; description: string };
-
 type RobotDataStatus = {
   listening: boolean;
   connected: boolean;
   connection_count: number;
   peers: { host: string; port: number }[];
   debug?: { manifest: unknown | null };
-  recording: {
-    uploads: Record<string, {
-      state: string;
-      detail?: string;
-      uploadedFiles?: number;
-      skippedFiles?: number;
-      totalBytes?: number;
-      uploadedBytes?: number;
-      currentFile?: string | null;
-      metadata?: RecordingMetadata;
-    }>;
-  };
+
 };
 
 type AdbDeviceRole = "auto" | "robot_controller" | "camera" | "ignored";
@@ -107,6 +95,7 @@ type CameraCaptureStatus = {
   telemetry_session_id: string | null;
   preview: { enabled: boolean; running: boolean; detail: string | null };
   error: string | null;
+  recording_notice?: string | null;
 };
 
 type DashboardCameraStatus = { capture: CameraCaptureStatus; adb: AdbCameraStatus };
@@ -429,68 +418,6 @@ function OpModeControl({
   </section>;
 }
 
-function RecordingUploadModal({
-  sessionId,
-  uploadState,
-  busy,
-  error,
-  onUpload,
-  onDiscard,
-}: {
-  sessionId: string;
-  uploadState: { state: string; detail?: string; metadata?: RecordingMetadata };
-  busy: boolean;
-  error: string | null;
-  onUpload: (metadata: RecordingMetadata, keepLocal: boolean) => void;
-  onDiscard: () => void;
-}) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const [title, setTitle] = useState(uploadState.metadata?.title ?? "");
-  const [description, setDescription] = useState(uploadState.metadata?.description ?? "");
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    dialog?.showModal();
-    return () => dialog?.close();
-  }, []);
-
-  const failed = uploadState.state === "error";
-  const savedMetadata = uploadState.metadata;
-  const metadata = savedMetadata ?? { title: title.trim(), description: description.trim() };
-  const canUpload = !busy && Boolean(metadata.title && metadata.description);
-
-  return (
-    <dialog className="recording-modal panel" ref={dialogRef} aria-labelledby="recording-modal-title" onCancel={event => event.preventDefault()}>
-      <p className="eyebrow">Telemetry recording</p>
-      <h2 id="recording-modal-title">{failed ? "Recording needs attention" : "Recording ready"}</h2>
-      {uploadState.detail && <p role={failed ? "alert" : undefined}>{uploadState.detail}</p>}
-      <code className="recording-session-id">{sessionId}</code>
-      <form onSubmit={event => {
-        event.preventDefault();
-        if (!canUpload) return;
-        const submitter = (event.nativeEvent as SubmitEvent).submitter;
-        onUpload(metadata, submitter instanceof HTMLButtonElement && submitter.value === "keep_local");
-      }}>
-        <label className="recording-field">
-          Title
-          <input type="text" required maxLength={120} disabled={busy} readOnly={Boolean(savedMetadata)}
-            value={savedMetadata?.title ?? title} onChange={event => setTitle(event.target.value)} />
-        </label>
-        <label className="recording-field">
-          Description
-          <textarea required rows={4} maxLength={4000} disabled={busy} readOnly={Boolean(savedMetadata)}
-            value={savedMetadata?.description ?? description} onChange={event => setDescription(event.target.value)} />
-        </label>
-        {error && <p className="recording-modal-error" role="alert">{error}</p>}
-        <div className="recording-modal-actions">
-          <button className="primary" type="submit" disabled={!canUpload}>{failed ? "Retry upload only" : "Upload only"}</button>
-          <button className="secondary" type="submit" value="keep_local" disabled={!canUpload}>{failed ? "Retry and keep laptop copy" : "Upload and keep laptop copy"}</button>
-          <button className="danger" type="button" disabled={busy} onClick={onDiscard}>Discard recording</button>
-        </div>
-      </form>
-    </dialog>
-  );
-}
-
 function DirectCameraPreview({ active, detail }: { active: boolean; detail: string | null }) {
   const [source, setSource] = useState<string | null>(null);
 
@@ -550,8 +477,6 @@ function DriverStationPage({
   const [assignments, setAssignments] = useState<DriverAssignments>({ 1: null, 2: null });
   const [notice, setNotice] = useState("Connect to a controlled test Robot Controller.");
   const [busy, setBusy] = useState(false);
-  const [recordingBusy, setRecordingBusy] = useState(false);
-  const [recordingError, setRecordingError] = useState<{ sessionId: string; detail: string } | null>(null);
   const [adbBusy, setAdbBusy] = useState(false);
   const [pingMs, setPingMs] = useState<number | null>(null);
   const [batteryVoltage, setBatteryVoltage] = useState<number | null>(null);
@@ -560,7 +485,6 @@ function DriverStationPage({
     connected: false,
     connection_count: 0,
     peers: [],
-    recording: { uploads: {} },
   });
   const [adbCamera, setAdbCamera] = useState<AdbCameraStatus>(emptyAdbCameraStatus);
   const [captureCamera, setCaptureCamera] = useState<CameraCaptureStatus>(emptyCaptureStatus);
@@ -611,9 +535,6 @@ function DriverStationPage({
     };
   }, [controlLease, connected]);
   const gamepadPanelVisible = gamepadEnabled && !physicalMode;
-  const recordingUploads = Object.entries(robotData.recording?.uploads ?? {}).filter(([sessionId]) => sessionId !== "configuration");
-  const pendingRecording = recordingUploads.find(([, upload]) => upload.state === "ready_to_upload" || upload.state === "error");
-  const latestUpload = recordingUploads.length ? recordingUploads[recordingUploads.length - 1] : null;
 
   const updateAssignments = useCallback((next: DriverAssignments) => {
     assignmentsRef.current = next;
@@ -912,31 +833,6 @@ function DriverStationPage({
     }
   };
 
-  const recordingAction = async (decision: { metadata: RecordingMetadata; keepLocal: boolean } | null) => {
-    if (!pendingRecording) return;
-    const [sessionId] = pendingRecording;
-    if (!decision && !window.confirm("Discard this telemetry and video recording from the laptop? It will not be uploaded and cannot be recovered.")) return;
-    setRecordingBusy(true);
-    setRecordingError(null);
-    try {
-      const path = `/data/recordings/${encodeURIComponent(sessionId)}`;
-      if (decision) {
-        await api(`${path}/upload`, {
-          method: "POST",
-          body: JSON.stringify({ ...decision.metadata, keep_local: decision.keepLocal }),
-        });
-        setNotice(decision.keepLocal ? "Recording upload started. The laptop copy will be kept." : "Recording upload started. The laptop copy will be removed after a successful upload.");
-      } else {
-        await api(`${path}/discard`, { method: "DELETE" });
-        setNotice("Recording discarded from this laptop.");
-      }
-    } catch (error) {
-      setRecordingError({ sessionId, detail: error instanceof Error ? error.message : "Recording action failed" });
-    } finally {
-      setRecordingBusy(false);
-    }
-  };
-
   const assignAdbRole = async (serial: string, role: AdbDeviceRole) => {
     setAdbBusy(true);
     try {
@@ -1146,6 +1042,7 @@ function DriverStationPage({
     <>
     <main className="driver-dashboard" hidden={page !== "driver"}>
       {topbar}
+      <RecordingsPanel robotState={status.robot_state} />
 
       <section className="driver-command-row">
       <section className="connection-panel panel">
@@ -1204,18 +1101,7 @@ function DriverStationPage({
         </div> : <p className="camera-preflight">Camera capture is optional. Assign an Android camera only when you want to use the native Camera controls.</p>}
         {adbCamera.adb_error && <p className="camera-error">{adbCamera.adb_error}</p>}
         {directMode && <DirectCameraPreview active={captureCamera.preview.running && !captureCamera.recording} detail={cameraDetail} />}
-        {latestUpload && <div className={`camera-upload-status upload-${latestUpload[1].state}`}>
-          <strong>Telemetry upload · {latestUpload[1].state.replaceAll("_", " ")}</strong>
-          <span>{latestUpload[0]}</span>
-          {latestUpload[1].detail && <small>{latestUpload[1].detail}</small>}
-          {latestUpload[1].state === "uploading" && typeof latestUpload[1].totalBytes === "number" && latestUpload[1].totalBytes > 0 && (() => {
-            const progress = Math.min(100, Math.round((latestUpload[1].uploadedBytes ?? 0) / latestUpload[1].totalBytes * 100));
-            return <div className="upload-progress" role="progressbar" aria-label="Telemetry upload progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
-              <div className="upload-progress-fill" style={{ width: `${progress}%` }} />
-              <span>{progress}% · {bytesLabel(latestUpload[1].uploadedBytes ?? 0)} / {bytesLabel(latestUpload[1].totalBytes)}</span>
-            </div>;
-          })()}
-        </div>}
+        {directMode && captureCamera.recording_notice && <p className="camera-preflight" role="status">{captureCamera.recording_notice}</p>}
         <div className="adb-device-list">
           {adbCamera.devices.length ? adbCamera.devices.map((device) => (
             <article className={`adb-device-card role-${device.effective_role}`} key={device.serial}>
@@ -1338,15 +1224,6 @@ function DriverStationPage({
     </main>}
     {page === "telemetry" && <TelemetryDashboard topbar={topbar} opModeControl={opModeControl} />}
     {page === "debug" && <DebuggerPage opModeControl={opModeControl} onDebuggerLaunched={() => setOpmode("FTC Advanced Debugger")} />}
-    {pendingRecording && <RecordingUploadModal
-      key={pendingRecording[0]}
-      sessionId={pendingRecording[0]}
-      uploadState={pendingRecording[1]}
-      busy={recordingBusy}
-      error={recordingError?.sessionId === pendingRecording[0] ? recordingError.detail : null}
-      onUpload={(metadata, keepLocal) => void recordingAction({ metadata, keepLocal })}
-      onDiscard={() => void recordingAction(null)}
-    />}
     </>
   );
 }

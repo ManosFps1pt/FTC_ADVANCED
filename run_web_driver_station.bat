@@ -81,6 +81,20 @@ if errorlevel 1 (
 )
 popd
 
+pushd "%CD%\recording_viewer\frontend"
+call %PNPM_COMMAND% install --frozen-lockfile
+if errorlevel 1 (
+    popd
+    exit /b 1
+)
+echo Building the replay library...
+call %PNPM_COMMAND% run build
+if errorlevel 1 (
+    popd
+    exit /b 1
+)
+popd
+
 echo.
 echo Starting the local Driver Station dashboard at http://127.0.0.1:8000
 echo Keep this window open while using the dashboard. Press Ctrl+C to stop it.

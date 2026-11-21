@@ -77,6 +77,21 @@ class _DisconnectedPreviewScrcpy(_FakeScrcpy):
         return status
 
 
+class _InterruptedRecordingScrcpy(_FakeScrcpy):
+    def __init__(self, finalized: bool) -> None:
+        super().__init__()
+        self.finalized = finalized
+
+    def stop(self) -> dict[str, object]:
+        super().stop()
+        return {
+            "state": "DISCONNECTED",
+            "scrcpy_finalized": self.finalized,
+            "bytes": len(b"finalized-video"),
+            "error": "Device disconnected",
+        }
+
+
 class CameraRecordingCoordinatorTests(unittest.TestCase):
     def make_coordinator(self, root: Path):
         finalized: list[tuple[str, str | None]] = []
@@ -115,6 +130,32 @@ class CameraRecordingCoordinatorTests(unittest.TestCase):
 
             self.assertEqual([(session_id, None)], finalized)
             self.assertTrue((root / "recordings" / session_id / "video" / "scrcpy" / "recording.mp4").is_file())
+
+    def test_interrupted_capture_is_attached_only_when_scrcpy_finalized_it(self) -> None:
+        for mp4_finalized in (True, False):
+            with self.subTest(mp4_finalized=mp4_finalized), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                coordinator, _fake, _adb, finalized = self.make_coordinator(root)
+                scrcpy = _InterruptedRecordingScrcpy(mp4_finalized)
+                coordinator._scrcpy = scrcpy
+                session_id = str(uuid.uuid4())
+                coordinator.ensure_recording(session_id)
+                staged = scrcpy.calls[-1][1]
+
+                status = coordinator.stop_recording_for_session(session_id)
+
+                attached = root / "recordings" / session_id / "video" / "scrcpy" / "recording.mp4"
+                self.assertTrue(coordinator.video_ready_for(session_id))
+                if mp4_finalized:
+                    self.assertEqual([(session_id, None)], finalized)
+                    self.assertEqual(b"finalized-video", attached.read_bytes())
+                    self.assertFalse(staged.exists())
+                    self.assertIn("disconnected early", status["recording_notice"])
+                else:
+                    self.assertEqual([(session_id, "Device disconnected")], finalized)
+                    self.assertFalse(attached.exists())
+                    self.assertTrue(staged.is_file())
+                    self.assertIsNone(status["recording_notice"])
 
     def test_unpaired_video_stays_in_recoverable_staging(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
