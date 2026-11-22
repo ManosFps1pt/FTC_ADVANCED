@@ -1,7 +1,10 @@
-"""HTTP views used by the local recordings panel, Discord, and MCP."""
+"""Recording review views shared by the Driver Station and Oracle replay MCP."""
 
 import asyncio
+from functools import partial
+from pathlib import Path
 from typing import Annotated, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -10,9 +13,11 @@ from recording_viewer.backend.run_analysis import RunAnalysis, event_page, finge
 
 from .debugger_results import atomic_json
 from .ftclog import FtcLogError
-from .recording_metadata import RECORDING_METADATA_FILE, RecordingMetadata
+from .recording_metadata import (
+    RECORDING_METADATA_FILE, RecordingDetails, RecordingMetadata, has_recording_details, read_recording_metadata,
+)
 from .recording_uploader import RecordingUploadError
-from .saved_runs import describe_run, saved_streams
+from .saved_runs import describe_run, recording_metadata_rows, saved_streams
 
 Section = Literal["overview", "quality", "shooter", "electrical", "intake", "encoders"]
 EventKind = Literal["shooter_dips", "shooter_transitions", "intake_loads", "voltage_sags", "gate_windows"]
@@ -20,18 +25,21 @@ PlotKind = Literal["overview", "shooter", "electrical"]
 Seconds = Annotated[float, Query(ge=0, allow_inf_nan=False)]
 
 
-def review_routes(service) -> APIRouter:
+def review_routes(service, *, replay_base: str = "/replays/", cache_root: Path | None = None,
+                  writable: bool = True) -> APIRouter:
     router = APIRouter(prefix="/api/reviews")
-    analyzer = RunAnalysis()
+    writes = APIRouter()
+    analyzer = RunAnalysis(cache_root)
+    link = partial(replay_path, base=replay_base)
 
     def headers(run: dict) -> dict:
-        return {**run, "replay_path": replay_path(run["session_id"])}
+        return {**run, "replay_path": link(run["session_id"])}
 
     def source(session_id: str):
         if session_id == "latest":
             runs = service.saved_recording_sessions()
             if not runs:
-                raise HTTPException(404, "No finalized local recordings")
+                raise HTTPException(404, "No finalized recordings")
             session_id = runs[0]["session_id"]
         try:
             directory = service.recording_directory(session_id)
@@ -57,24 +65,39 @@ def review_routes(service) -> APIRouter:
             "upload_configured": service.recording_upload_configured,
         }
 
-    @router.post("/upload-pending")
+    @writes.post("/upload-pending")
     async def upload_pending() -> dict:
         try:
             return service.queue_uploads(await asyncio.to_thread(service.saved_recording_sessions))
         except (OSError, RecordingUploadError) as error:
             raise HTTPException(400, str(error)) from error
 
-    @router.patch("/{session_id}")
+    @router.get("/metadata")
+    def list_metadata(
+        run_id: UUID | None = None, kind: Literal["replay", "debugger"] | None = None,
+        offset: Annotated[int, Query(ge=0)] = 0, limit: Annotated[int, Query(ge=1, le=25)] = 10,
+    ) -> dict:
+        runs = recording_metadata_rows(service.recordings_root, service.review_exclusions(), run_id=run_id, kind=kind)
+        return {
+            "runs": runs[offset:offset + limit], "total": len(runs),
+            "next_offset": offset + limit if offset + limit < len(runs) else None,
+        }
+
+    @writes.patch("/{session_id}")
     async def update_notes(session_id: str, metadata: RecordingMetadata) -> dict:
         directory, _ = source(session_id)
+        changes = metadata.model_dump(exclude_none=True)
+        if metadata.model_fields_set.intersection(RecordingDetails.model_fields) and not has_recording_details(changes):
+            raise HTTPException(422, "Provide a battery index, robot version, and OpMode type.")
         try:
             service.check_recording_edit(directory.name, editing_notes=True)
-            atomic_json(directory / RECORDING_METADATA_FILE, metadata.model_dump())
-            return metadata.model_dump()
+            updated = {**(read_recording_metadata(directory) or {}), **changes}
+            atomic_json(directory / RECORDING_METADATA_FILE, updated)
+            return updated
         except (OSError, RecordingUploadError) as error:
             raise HTTPException(409, str(error)) from error
 
-    @router.delete("/{session_id}")
+    @writes.delete("/{session_id}")
     async def delete_local(session_id: str) -> dict:
         directory, _ = source(session_id)
         try:
@@ -123,7 +146,7 @@ def review_routes(service) -> APIRouter:
             result = analyzer.report(directory, fingerprint(streams))
             return {
                 "session_id": directory.name,
-                **event_page(result, directory.name, kind, offset, limit),
+                **event_page(result, directory.name, kind, offset, limit, link=link),
             }
         except (FtcLogError, OSError, ValueError) as error:
             raise HTTPException(422, str(error)) from error
@@ -144,7 +167,7 @@ def review_routes(service) -> APIRouter:
         try:
             return {
                 "session_id": directory.name,
-                "replay_path": replay_path(directory.name, start),
+                "replay_path": link(directory.name, start),
                 **analyzer.window(directory, fingerprint(streams), signals, start, end, points),
             }
         except (FtcLogError, OSError, ValueError) as error:
@@ -159,4 +182,6 @@ def review_routes(service) -> APIRouter:
         except (FtcLogError, OSError, ValueError) as error:
             raise HTTPException(422, str(error)) from error
 
+    if writable:
+        router.include_router(writes)
     return router

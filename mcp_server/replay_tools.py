@@ -1,6 +1,7 @@
 """Read-only MCP adapters for saved FTC recording measurements."""
 
 import asyncio
+from collections.abc import Callable
 from typing import Annotated, Literal
 from urllib.parse import urlencode
 from uuid import UUID
@@ -25,25 +26,44 @@ def _path(run: str, suffix: str) -> str:
     return f"/api/reviews/{session_id}/{suffix}"
 
 
-async def _report(run: str, section: str) -> dict:
-    result = await DriverStationApi(timeout_s=30).get(_path(run, f"report?section={section}"))
-    assert isinstance(result, dict)
-    return result
+def register_replay_tools(
+    mcp: FastMCP, api_factory: Callable[..., DriverStationApi] = DriverStationApi,
+) -> None:
+    async def _report(run: str, section: str) -> dict:
+        result = await api_factory(timeout_s=30).get(_path(run, f"report?section={section}"))
+        assert isinstance(result, dict)
+        return result
 
+    async def _events(run: str, kind: str, limit: int, offset: int) -> dict:
+        result = await api_factory(timeout_s=30).get(_path(run, f"events/{kind}?limit={limit}&offset={offset}"))
+        assert isinstance(result, dict)
+        return result
 
-async def _events(run: str, kind: str, limit: int, offset: int) -> dict:
-    result = await DriverStationApi(timeout_s=30).get(_path(run, f"events/{kind}?limit={limit}&offset={offset}"))
-    assert isinstance(result, dict)
-    return result
-
-
-def register_replay_tools(mcp: FastMCP) -> None:
     @mcp.tool(annotations=READ_ONLY)
     async def list_replays(search: Annotated[str, Field(max_length=120)] = "", limit: Limit = 10,
                            offset: Offset = 0) -> dict:
-        """Find finalized local runs, newest first. Resolve and reuse the session ID for multi-step analysis."""
+        """Find finalized runs, newest first. Resolve and reuse the session ID for multi-step analysis."""
         query = urlencode({"search": search, "limit": limit, "offset": offset})
-        result = await DriverStationApi().get(f"/api/reviews?{query}")
+        result = await api_factory().get(f"/api/reviews?{query}")
+        assert isinstance(result, dict)
+        return result
+
+    @mcp.tool(annotations=READ_ONLY)
+    async def list_recording_metadata(
+        run_id: UUID | None = None, kind: Literal["replay", "debugger"] | None = None,
+        limit: Limit = 10, offset: Offset = 0,
+    ) -> dict:
+        """List battery index (0–8), numeric robot version, and OpMode type for finalized recordings and debugger benchmarks.
+
+        Results are newest first, with null for details that were never recorded. Use
+        next_offset to page through results, or supply a recording or benchmark UUID.
+        """
+        params: dict[str, str | int] = {"limit": limit, "offset": offset}
+        if run_id is not None:
+            params["run_id"] = str(run_id)
+        if kind is not None:
+            params["kind"] = kind
+        result = await api_factory().get(f"/api/reviews/metadata?{urlencode(params)}")
         assert isinstance(result, dict)
         return result
 
@@ -60,7 +80,7 @@ def register_replay_tools(mcp: FastMCP) -> None:
     @mcp.tool(annotations=READ_ONLY)
     async def list_recorded_signals(run: str = "latest") -> dict:
         """List recorded numeric signal IDs, units and counts of usable samples."""
-        result = await DriverStationApi(timeout_s=30).get(_path(run, "signals"))
+        result = await api_factory(timeout_s=30).get(_path(run, "signals"))
         assert isinstance(result, dict)
         return result
 
@@ -73,7 +93,7 @@ def register_replay_tools(mcp: FastMCP) -> None:
         Statistics use all observed window samples. The returned series is downsampled to points.
         """
         query = urlencode({"start": start_s, "end": end_s, "signals": signals, "points": points}, doseq=True)
-        result = await DriverStationApi(timeout_s=30).get(_path(run, f"window?{query}"))
+        result = await api_factory(timeout_s=30).get(_path(run, f"window?{query}"))
         assert isinstance(result, dict)
         return result
 
@@ -135,5 +155,5 @@ def register_replay_tools(mcp: FastMCP) -> None:
     async def get_replay_plot(kind: Literal["overview", "shooter", "electrical"] = "overview",
                               run: str = "latest") -> Image:
         """Return a PNG overview, shooter-deceleration plot or electrical event plot for a saved run."""
-        image = await DriverStationApi(timeout_s=45).get_png(_path(run, f"plot/{kind}"))
+        image = await api_factory(timeout_s=45).get_png(_path(run, f"plot/{kind}"))
         return Image(data=image, format="png")

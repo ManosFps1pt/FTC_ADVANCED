@@ -13,6 +13,7 @@ from google.protobuf.json_format import MessageToDict
 from .debugger_analysis import ANALYZERS
 from .ftclog import FtcLogError, RawFtcLogRecorder, iter_records
 from .protocol import robot_data_pb2 as wire
+from .recording_metadata import read_recording_metadata
 
 MAX_SAMPLES = 30_000
 
@@ -49,7 +50,10 @@ class DebuggerResults:
                     if manifest.get("kind") == "debugger":
                         if manifest.get("state") != "ready" and path.name not in self.pending:
                             manifest.update(state="incomplete", message="Previous acquisition or transfer did not finish; retained robot data may reconnect.")
-                        result[path.name] = {**manifest, **self.pending.get(path.name, {})}
+                        result[path.name] = {
+                            **manifest, **self.pending.get(path.name, {}),
+                            "metadata": read_recording_metadata(self.path(path.name)),
+                        }
                 except (ValueError, OSError, json.JSONDecodeError):
                     continue
         return sorted(result.values(), key=lambda r: r.get("createdAt", ""), reverse=True)
@@ -60,7 +64,9 @@ class DebuggerResults:
     def report(self, run_id: str) -> dict:
         manifest = self.manifest(run_id)
         if manifest.get("kind") != "debugger": raise ValueError("Not a debugger result")
-        report_path = self.path(run_id)/"analysis.json"
+        path = self.path(run_id)
+        manifest["metadata"] = read_recording_metadata(path)
+        report_path = path/"analysis.json"
         return {"manifest": manifest, "analysis": json.loads(report_path.read_text(encoding="utf-8")) if report_path.is_file() else None}
 
     def expect(self, run_id: str, metadata: dict) -> None:

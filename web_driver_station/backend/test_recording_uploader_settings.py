@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+from uuid import uuid4
 
+from .ftclog import RawFtcLogRecorder
+from .recording_metadata import RECORDING_METADATA_FILE
 from .recording_uploader import (
     RecordingUploadError,
+    RecordingUploader,
     UploadSettings,
     _PinnedHostKeyPolicy,
     _host_key_fingerprint,
@@ -107,6 +113,54 @@ class UploadSettingsTests(unittest.TestCase):
         policy.missing_host_key(None, "oracle.example", expected)
         with self.assertRaisesRegex(RecordingUploadError, "did not match"):
             policy.missing_host_key(None, "oracle.example", _FakeHostKey(b"impostor-key"))
+
+
+class RecordingMetadataUploadTests(unittest.TestCase):
+    def test_retry_replaces_staged_metadata_and_verifies_published_details(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            session_id = str(uuid4())
+            recorder = RawFtcLogRecorder(root / "local")
+            recorder.append(session_id, b"telemetry", 1)
+            log_path = recorder.close_session(session_id)
+            source = log_path.parent.parent
+            uploader = RecordingUploader(UploadSettings("oracle", "ubuntu", root / "unused", "/published"))
+            uploader._connect = Mock()
+            with self.assertRaisesRegex(RecordingUploadError, "Save the battery index"):
+                uploader.upload(source)
+            uploader._connect.assert_not_called()
+
+            remote = root / "remote"
+            staged = remote / "published" / ".incoming" / session_id
+            published = remote / "published" / session_id
+            metadata_path = source / RECORDING_METADATA_FILE
+            previous = {"title": "Practice", "battery_index": 1, "robot_version": 1, "opmode_type": "auto"}
+            expected = {**previous, "battery_index": 0}
+            (staged / "raw").mkdir(parents=True)
+            (staged / RECORDING_METADATA_FILE).write_text(json.dumps(previous), encoding="utf-8")
+            (staged / "raw" / log_path.name).write_bytes(log_path.read_bytes()[:20])
+            metadata_path.write_text(json.dumps(expected), encoding="utf-8")
+
+            def remote_path(path):
+                return remote / path.lstrip("/")
+
+            sftp = SimpleNamespace(
+                stat=lambda path: remote_path(path).stat(), mkdir=lambda path: remote_path(path).mkdir(),
+                file=Mock(side_effect=lambda path, mode: remote_path(path).open("r+b" if mode == "r+" else mode)),
+                close=lambda: None,
+            )
+            uploader._connect.return_value.open_sftp.return_value = sftp
+            with patch("web_driver_station.backend.recording_uploader._rename_into_library",
+                       side_effect=lambda _client, stage_path, final_path: remote_path(stage_path).rename(remote_path(final_path))):
+                uploader.upload(source)
+            self.assertEqual(expected, json.loads((published / RECORDING_METADATA_FILE).read_bytes()))
+            self.assertEqual(log_path.read_bytes(), (published / "raw" / log_path.name).read_bytes())
+            self.assertIn("r+", [call.args[1] for call in sftp.file.call_args_list])
+            self.assertTrue(uploader.upload(source).already_present)
+            metadata_path.write_text(json.dumps(previous), encoding="utf-8")
+            with self.assertRaisesRegex(RecordingUploadError, "different recording details"):
+                uploader.upload(source)
+            self.assertEqual(expected, json.loads((published / RECORDING_METADATA_FILE).read_bytes()))
 
 
 if __name__ == "__main__":

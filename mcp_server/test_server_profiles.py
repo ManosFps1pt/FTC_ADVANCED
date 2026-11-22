@@ -9,7 +9,8 @@ class ServerProfileTests(unittest.IsolatedAsyncioTestCase):
         full = {tool.name for tool in await mcp.list_tools()}
         replay = {tool.name: tool for tool in await create_replay_server().list_tools()}
         self.assertTrue(status_tools <= full)
-        self.assertTrue(status_tools | {"list_replays", "find_shooter_dips"} <= replay.keys())
+        self.assertIn("list_recording_metadata", full)
+        self.assertTrue(status_tools | {"list_replays", "list_recording_metadata", "find_shooter_dips"} <= replay.keys())
         self.assertTrue(all(tool.annotations.readOnlyHint for tool in replay.values()))
         self.assertNotIn("launch_opmode", replay)
         self.assertNotIn("stop_opmode", replay)

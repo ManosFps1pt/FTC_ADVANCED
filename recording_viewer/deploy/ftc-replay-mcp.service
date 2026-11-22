@@ -1,0 +1,24 @@
+[Unit]
+Description=FTC Advanced Oracle replay MCP
+
+[Service]
+Type=simple
+User=ftc-replay-mcp
+WorkingDirectory=/opt/ftc-replay-mcp
+Environment=FTC_RECORDING_DIR=/srv/ftc-recordings
+Environment=FTC_REPLAY_CACHE_DIR=/var/cache/ftc-replay-mcp
+Environment=MPLCONFIGDIR=/var/cache/ftc-replay-mcp/matplotlib
+EnvironmentFile=/etc/ftc-replay-mcp/viewer.env
+ExecStart=/opt/ftc-replay-mcp/.venv/bin/python -m mcp_server.archive
+CacheDirectory=ftc-replay-mcp
+CacheDirectoryMode=0700
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/srv/ftc-recordings
+NoNewPrivileges=true
+PrivateTmp=true
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

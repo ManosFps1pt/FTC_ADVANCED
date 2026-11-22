@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RobotConfiguration } from "./RobotConfiguration";
 import { TelemetryDashboard } from "./TelemetryDashboard";
 import { DebuggerPage } from "./DebuggerPage";
-import { RecordingsPanel } from "./RecordingsPanel";
+import { RecordingDetailsPrompt, RecordingsPanel, useRecordingLibrary } from "./RecordingsPanel";
 
 type Status = {
   connected: boolean;
@@ -469,6 +469,7 @@ function DriverStationPage({
     telemetry: null,
     driver_station_error: null,
   });
+  const recordings = useRecordingLibrary(status.robot_state);
   const [opmodes, setOpmodes] = useState<Record<string, unknown>[]>([]);
   const [opmode, setOpmode] = useState("");
   const [user, setUser] = useState<1 | 2>(1);
@@ -1042,7 +1043,7 @@ function DriverStationPage({
     <>
     <main className="driver-dashboard" hidden={page !== "driver"}>
       {topbar}
-      <RecordingsPanel robotState={status.robot_state} />
+      <RecordingsPanel {...recordings} />
 
       <section className="driver-command-row">
       <section className="connection-panel panel">
@@ -1224,6 +1225,7 @@ function DriverStationPage({
     </main>}
     {page === "telemetry" && <TelemetryDashboard topbar={topbar} opModeControl={opModeControl} />}
     {page === "debug" && <DebuggerPage opModeControl={opModeControl} onDebuggerLaunched={() => setOpmode("FTC Advanced Debugger")} />}
+    <RecordingDetailsPrompt {...recordings} />
     </>
   );
 }

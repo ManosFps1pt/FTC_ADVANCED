@@ -23,7 +23,7 @@ from web_driver_station.backend.debugger_results import DebuggerResults
 from web_driver_station.backend.debugger_api import install_result_reads
 from web_driver_station.backend.protocol import robot_data_pb2 as wire
 from web_driver_station.backend.protocol_codec import WireProtocolError, decode
-from web_driver_station.backend.recording_metadata import read_recording_metadata
+from web_driver_station.backend.recording_metadata import read_recording_metadata, recording_details
 
 
 class RecordingLoadError(ValueError):
@@ -351,7 +351,7 @@ def create_library_app(recordings_root: Path, *, excluded: Callable[[], set[str]
 
         return [{
             "id": item["session_id"],
-            "metadata": {"title": item["title"], "description": item["description"]},
+            "metadata": {"title": item["title"], "description": item["description"], **recording_details(item)},
             "modifiedAtNs": str(int(datetime.fromisoformat(item["captured_at"]).timestamp() * 1e9)),
             "logFileCount": len(item["logs"]) + len(item["partial_logs"]),
             "interrupted": item["interrupted"],

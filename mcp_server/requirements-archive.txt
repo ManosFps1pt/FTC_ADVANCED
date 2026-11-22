@@ -1,0 +1,5 @@
+-r requirements.txt
+fastapi>=0.115,<1
+protobuf>=5.26.1,<6
+numpy>=1.26,<3
+matplotlib>=3.9,<4

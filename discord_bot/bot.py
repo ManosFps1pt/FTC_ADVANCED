@@ -180,7 +180,15 @@ class FtcDiscordBot(discord.Client):
             for guild_id in sorted(self.settings.guild_ids):
                 guild = discord.Object(id=guild_id)
                 self.tree.copy_global_to(guild=guild)
-                await self.tree.sync(guild=guild)
+                try:
+                    await self.tree.sync(guild=guild)
+                except discord.Forbidden:
+                    LOG.error(
+                        "Cannot sync commands to guild %s: application %s lacks access. "
+                        "Check the server ID, bot installation, and DISCORD_BOT_TOKEN override.",
+                        guild_id, self.application_id,
+                    )
+                    continue
                 LOG.info("Synced slash commands to guild %s", guild_id)
         else:
             await self.tree.sync()

@@ -54,3 +54,13 @@ Local captures are available to the bot after the laptop regains internet.
 
 Results are posted in the channel where the command is used. The bot does not
 need an OpenAI API key.
+
+## Troubleshooting server access
+
+If startup reports that an application cannot sync commands to a guild, check
+that the server ID in `discord.guild_ids` is correct and that the same Discord
+application is installed in that server with the `bot` and
+`applications.commands` scopes. The log identifies the application and server
+IDs. A `DISCORD_BOT_TOKEN` environment variable overrides the token in the local
+JSON file; remove a stale override or update it to use the intended application.
+The bot continues syncing other configured servers when one denies access.

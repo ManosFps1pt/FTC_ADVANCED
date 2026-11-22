@@ -14,8 +14,10 @@ from fastapi.testclient import TestClient
 from recording_viewer.backend.main import create_library_app
 
 from .ftclog import RawFtcLogRecorder
+from .debugger_results import atomic_json
 from .main import RobotDataService
 from .protocol import robot_data_pb2 as wire
+from .recording_metadata import RECORDING_METADATA_FILE, read_recording_metadata
 from .recording_uploader import RecordingUploadError, UploadResult
 from .review_api import review_routes
 
@@ -88,9 +90,23 @@ class ReplayReviewTests(unittest.TestCase):
                     self.assertEqual(2, len(window["seconds"]))
                     replay = client.get(f"/replays/api/recordings/{latest}").raise_for_status().json()
                     self.assertEqual(40, len(replay["snapshots"]))
+                    self.assertIsNone(replay["metadata"])
+                    service._raw_finalized.add(latest)
+                    service._video_ready_checker = lambda session: session != latest
+                    self.assertTrue(service.saved_recording_sessions()[0]["prompt_for_details"])
+                    details = {"battery_index": 0, "robot_version": 1, "opmode_type": "auto"}
+                    self.assertEqual(422, client.patch(f"/api/reviews/{latest}", json={"title": "Lab", "battery_index": 0}).status_code)
+                    client.patch(f"/api/reviews/{latest}", json={"title": "Lab", **details}).raise_for_status()
                     client.patch(f"/api/reviews/{latest}", json={"title": "Lab attempt"}).raise_for_status()
                     renamed = client.get("/api/reviews?search=Lab").raise_for_status().json()["runs"]
                     self.assertEqual("Lab attempt", renamed[0]["title"])
+                    self.assertFalse(renamed[0]["needs_details"])
+                    self.assertFalse(renamed[0]["prompt_for_details"])
+                    for url in ("/replays/api/recordings", f"/replays/api/recordings/{latest}/summary"):
+                        result = client.get(url).raise_for_status().json()
+                        metadata = result[0]["metadata"] if isinstance(result, list) else result["metadata"]
+                        self.assertEqual(details, {key: metadata[key] for key in details})
+                    service._video_ready_checker = lambda _session: True
                     client.delete(f"/api/reviews/{latest}").raise_for_status()
                     self.assertEqual(404, client.get(f"/replays/api/recordings/{latest}").status_code)
             finally:
@@ -104,6 +120,10 @@ class RecordingQueueTests(unittest.IsolatedAsyncioTestCase):
             session_id = str(uuid4())
             recorder = RawFtcLogRecorder(root)
             path = record_shooter_run(recorder, session_id)
+            untagged = str(uuid4())
+            record_shooter_run(recorder, untagged)
+            metadata = {"title": "Restart test", "description": "", "battery_index": 8, "robot_version": 2, "opmode_type": "teleop"}
+            atomic_json(path.parent.parent / RECORDING_METADATA_FILE, metadata)
             service = RobotDataService()
             service._raw_recorder = recorder
             failed = asyncio.Event()
@@ -123,6 +143,7 @@ class RecordingQueueTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await service.close()
             self.assertTrue(path.is_file())
+            service._update_queue_entry(untagged, "queued")  # Queue persisted by an older app.
 
             restarted = RobotDataService()
             restarted._raw_recorder = RawFtcLogRecorder(root)
@@ -131,16 +152,19 @@ class RecordingQueueTests(unittest.IsolatedAsyncioTestCase):
 
             class OnlineUploader:
                 def upload(self, directory, **kwargs):
-                    calls.append(directory.name)
+                    calls.append((directory.name, read_recording_metadata(directory)))
                     return UploadResult(directory.name, 1, 0, path.stat().st_size)
 
             restarted._recording_uploader = OnlineUploader()
             try:
                 await restarted.start()
                 await asyncio.wait_for(restarted._queue_task, 2)
-                self.assertEqual([session_id], calls)
+                self.assertEqual([(session_id, metadata)], calls)
                 self.assertTrue(path.is_file())
-                self.assertEqual("uploaded", restarted.saved_recording_sessions()[0]["upload"]["state"])
+                runs = {run["session_id"]: run for run in restarted.saved_recording_sessions()}
+                self.assertEqual("uploaded", runs[session_id]["upload"]["state"])
+                self.assertTrue(runs[untagged]["needs_details"])
+                self.assertFalse(runs[untagged]["details_locked"])
                 self.assertEqual({"queued": 0}, restarted.queue_uploads(restarted.saved_recording_sessions()))
             finally:
                 await restarted.close()

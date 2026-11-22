@@ -11,6 +11,7 @@ Run the stack with `--online` or start the MCP server with
 connection checks to ChatGPT.
 
 - `list_replays`, `get_run_report`, `get_recording_quality` — find runs and check coverage and capture quality.
+- `list_recording_metadata` — find battery index, robot version, and OpMode type for finalized replays and completed Debugger benchmarks. Filter by `run_id` or `kind` (`replay` or `debugger`). Older recordings can return `null` for missing details.
 - `list_recorded_signals`, `get_signal_window` — inspect channel units, full-window statistics, and bounded signal samples.
 - `find_shooter_dips`, `get_shooter_transitions`, `get_shooter_tracking`, `compare_shooter_runs` — inspect speed, recovery, and saturation at common RPM targets.
 - `find_voltage_sags`, `get_motor_current_report`, `find_intake_loads`, `check_encoder_health` — review electrical and feedback evidence.
@@ -135,7 +136,7 @@ To verify the plugin points to the tunnel run by this laptop, compare its
 tunnel ID with the running client's `control_plane_tunnel_id` field:
 
 ```powershell
-(Invoke-RestMethod 'http://127.0.0.1:8080/api/status').control_plane_tunnel_id
+(Invoke-RestMethod 'http://127.0.0.1:18080/api/status').control_plane_tunnel_id
 ```
 
 If ChatGPT reports a `421 Misdirected Request`, the tunnel's public hostname
@@ -148,3 +149,34 @@ The MCP server calls the backend HTTP API and never imports backend globals.
 The backend remains authoritative for Robot Controller connectivity, telemetry
 storage, and safety. The Recording Viewer serves saved telemetry replay and
 video through its own API.
+
+## Oracle replay MCP
+
+`python -m mcp_server.archive` serves the saved-run tools from published
+recordings on Oracle. It binds to `127.0.0.1:8003/mcp` and uses the same
+measurements as the laptop. The recording directory is read-only and derived
+reports and plots go to a separate cache. The HTTPS viewer continues to serve
+the timestamped replay links.
+
+1. Put this source tree in `/opt/ftc-replay-mcp` on Oracle. Create a Python
+   3.11+ virtual environment at `.venv` and install `mcp_server/requirements-archive.txt`.
+   Create a service account named `ftc-replay-mcp` with read and directory
+   traversal access to the published archive, including future uploads.
+2. Install the [official OpenAI tunnel client](https://github.com/openai/tunnel-client/releases/latest)
+   for the instance architecture at `/usr/local/bin/tunnel-client` and verify
+   the release checksum. Install the two `ftc-replay-*.service` units from
+   `recording_viewer/deploy` in `/etc/systemd/system` and copy the tunnel YAML
+   to `/etc/ftc-replay-mcp/tunnel.yaml`.
+3. Set `FTC_REPLAY_VIEWER_URL=https://80.225.93.186/` in
+   `/etc/ftc-replay-mcp/viewer.env`, or use the deployed viewer URL. In the
+   root-owned, mode `0600` `/etc/ftc-replay-mcp/tunnel.env`, set the new
+   `CONTROL_PLANE_TUNNEL_ID` and its restricted `CONTROL_PLANE_API_KEY`.
+   Set `CONTROL_PLANE_ORGANIZATION_ID` if the tunnel requires it.
+4. Run `sudo systemctl daemon-reload` and
+   `sudo systemctl enable --now ftc-replay-mcp ftc-replay-tunnel`. Check both
+   unit logs and `curl --fail http://127.0.0.1:18081/readyz` on Oracle. These
+   units use loopback ports only. Nginx continues to serve the replay viewer.
+5. In the authorized ChatGPT workspace, create the **FTC Oracle Replays**
+   custom MCP plugin with the Oracle tunnel ID. Call `list_replays` with
+   `limit=1`, then use that run ID for `get_run_report`. Verify the hosted
+   replay link opens while the laptop is offline.

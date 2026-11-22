@@ -20,7 +20,9 @@ viewer. Subsequent launches work offline. The launcher opens
 <http://127.0.0.1:8000>. Press Ctrl+C in its terminal to stop it.
 
 The **Recordings** panel lists finalized runs and opens local replay or event
-review. Use **Upload pending** to queue the recordings after practice. If the
+review. Save the battery index, robot version, and OpMode type when a recording
+ends. The capture stays available for replay if you fill in the details later.
+Use **Upload pending** to queue recordings with saved details after practice. If the
 internet connection drops, leave the app running or restart it later to resume.
 The uploader keeps laptop copies.
 

@@ -17,6 +17,9 @@ from pydantic import BaseModel, Field
 
 from .debugger_results import DebuggerResults, atomic_json
 from .protocol import robot_data_pb2 as wire
+from .recording_metadata import (
+    DETAILS_REQUIRED, RECORDING_METADATA_FILE, RecordingDetails, has_recording_details, read_recording_metadata,
+)
 
 
 def install_result_reads(app: FastAPI, results: DebuggerResults) -> None:
@@ -75,6 +78,26 @@ def install_debugger_controls(app: FastAPI, service) -> None:
     results = service._debug_results
     install_result_reads(app, results)
     uploads: dict[str, dict] = {}
+
+    def storage_state(run_id: str) -> dict:
+        if run_id in uploads:
+            return uploads[run_id]
+        try:
+            stored = json.loads((results.path(run_id)/"storage.json").read_text(encoding="utf-8"))
+            if isinstance(stored, dict):
+                return stored
+        except (OSError, ValueError):
+            pass
+        return {"state": "ready"}
+
+    def ready_result(run_id: str) -> Path:
+        try:
+            manifest = results.manifest(run_id)
+            if manifest.get("kind") != "debugger" or manifest.get("state") != "ready":
+                raise ValueError("Result is incomplete")
+            return results.path(run_id)
+        except (OSError, ValueError) as error:
+            raise HTTPException(409, str(error)) from error
 
     async def send_command(run_id: str, command: str, metadata: dict, arguments=(), lease_id=None):
         envelope = service._debug_envelope(lease_id=lease_id, debug_command_request=wire.DebugCommandRequest(
@@ -151,27 +174,39 @@ def install_debugger_controls(app: FastAPI, service) -> None:
     def run_list():
         rows = results.list()
         for row in rows:
-            run_id = row["runId"]
-            storage = uploads.get(run_id)
-            if storage is None:
-                try: storage = json.loads((results.path(run_id)/"storage.json").read_text(encoding="utf-8"))
-                except (OSError, ValueError): storage = {"state": "ready"}
-            row["storage"] = storage
+            row["storage"] = storage_state(row["runId"])
         return rows
 
-    @app.post("/api/debug/runs/{run_id}/upload")
-    async def upload(run_id: str, request: StorageRequest):
+    @app.patch("/api/debug/runs/{run_id}/metadata")
+    async def save_metadata(run_id: uuid.UUID, details: RecordingDetails):
+        run_id = str(run_id)
+        path = ready_result(run_id)
+        if storage_state(run_id).get("state") in {"uploading", "complete"}:
+            raise HTTPException(409, "Recording details are locked during and after upload")
+        metadata = details.model_dump()
         try:
-            manifest = results.manifest(run_id)
-            if manifest.get("kind") != "debugger" or manifest.get("state") != "ready": raise ValueError("Result is incomplete")
-        except (OSError, ValueError) as error: raise HTTPException(409, str(error)) from error
+            atomic_json(path/RECORDING_METADATA_FILE, metadata)
+        except OSError as error:
+            raise HTTPException(409, str(error)) from error
+        return metadata
+
+    @app.post("/api/debug/runs/{run_id}/upload")
+    async def upload(run_id: uuid.UUID, request: StorageRequest):
+        run_id = str(run_id)
+        path = ready_result(run_id)
+        storage = storage_state(run_id)
+        if storage.get("state") == "uploading":
+            raise HTTPException(409, "Upload already active")
+        if storage.get("state") == "complete":
+            return storage
+        if not has_recording_details(read_recording_metadata(path)):
+            raise HTTPException(409, DETAILS_REQUIRED)
         if service._recording_uploader is None: raise HTTPException(409, "Recording upload is not configured")
-        if uploads.get(run_id, {}).get("state") == "uploading": raise HTTPException(409, "Upload already active")
         uploads[run_id] = {"state": "uploading"}
 
         async def work():
             try:
-                await asyncio.to_thread(service._recording_uploader.upload, results.path(run_id))
+                await asyncio.to_thread(service._recording_uploader.upload, path)
                 uploads[run_id] = {"state": "complete", "localCopyKept": request.keep_local}
                 if request.keep_local: atomic_json(results.path(run_id)/"storage.json", uploads[run_id])
                 else: results.forget(run_id)

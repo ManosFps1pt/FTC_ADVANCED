@@ -19,11 +19,15 @@ import posixpath
 import stat
 import uuid
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Callable
 
+from pydantic import ValidationError
+
 from ftc_local_config import LocalConfigError, local_config_path, section
 from .ftclog import is_closed_partial
+from .recording_metadata import DETAILS_REQUIRED, RECORDING_METADATA_FILE, StoredRecordingMetadata, has_recording_details
 
 
 class RecordingUploadError(RuntimeError):
@@ -198,7 +202,17 @@ class RecordingUploader:
         progress_callback: UploadProgressCallback | None = None,
     ) -> UploadResult:
         source, session_id, files = _validated_session(recording_directory)
-        total_bytes = sum(path.stat().st_size for path in files)
+        metadata_path = source / RECORDING_METADATA_FILE
+        if metadata_path not in files:
+            raise RecordingUploadError(DETAILS_REQUIRED)
+        try:
+            metadata_bytes = metadata_path.read_bytes()
+            metadata = StoredRecordingMetadata.model_validate_json(metadata_bytes).model_dump(exclude_none=True)
+        except (OSError, ValidationError) as error:
+            raise RecordingUploadError(DETAILS_REQUIRED) from error
+        if not has_recording_details(metadata):
+            raise RecordingUploadError(DETAILS_REQUIRED)
+        total_bytes = len(metadata_bytes) + sum(path.stat().st_size for path in files if path != metadata_path)
         completed_bytes = 0
         _report_progress(progress_callback, total_bytes, completed_bytes, None)
         _announce(progress, f"Connecting to {self.settings.host} as {self.settings.username}")
@@ -210,6 +224,7 @@ class RecordingUploader:
                 final_path = posixpath.join(remote_root, session_id)
                 stage_path = posixpath.join(remote_root, ".incoming", session_id)
                 if _remote_exists(sftp, final_path):
+                    _check_published_metadata(sftp, final_path, metadata)
                     _announce(progress, "Recording is already present on the server")
                     _report_progress(progress_callback, total_bytes, total_bytes, None)
                     return UploadResult(session_id, 0, len(files), 0, already_present=True)
@@ -219,14 +234,16 @@ class RecordingUploader:
                     relative = local_path.relative_to(source).as_posix()
                     remote_path = posixpath.join(stage_path, relative)
                     _mkdirs(sftp, posixpath.dirname(remote_path))
-                    size = local_path.stat().st_size
-                    if _remote_size(sftp, remote_path) == size:
+                    is_metadata = local_path == metadata_path
+                    size = len(metadata_bytes) if is_metadata else local_path.stat().st_size
+                    # Metadata may have changed since an earlier staged upload, even at the same byte length.
+                    existing_size = None if is_metadata else _remote_size(sftp, remote_path)
+                    if existing_size == size:
                         skipped_files += 1
                         completed_bytes += size
                         _report_progress(progress_callback, total_bytes, completed_bytes, relative)
                         _announce(progress, f"Already uploaded: {relative}")
                         continue
-                    existing_size = _remote_size(sftp, remote_path)
                     resume_at = existing_size if existing_size is not None and 0 <= existing_size < size else 0
                     # ``ab`` relies on server-side append semantics that vary
                     # between SFTP servers.  Seek the remote handle explicitly
@@ -236,7 +253,8 @@ class RecordingUploader:
                     written = resume_at
                     _report_progress(progress_callback, total_bytes, completed_bytes + written, relative)
                     next_progress = ((written // (5 * 1024 * 1024)) + 1) * 5 * 1024 * 1024
-                    with local_path.open("rb") as local_handle, sftp.file(remote_path, mode) as remote_handle:
+                    with (BytesIO(metadata_bytes) if is_metadata else local_path.open("rb")) as local_handle, \
+                            sftp.file(remote_path, mode) as remote_handle:
                         local_handle.seek(resume_at)
                         remote_handle.seek(resume_at)
                         while chunk := local_handle.read(1024 * 1024):
@@ -359,6 +377,17 @@ def _remote_exists(sftp, path: str) -> bool:
         return False
 
 
+def _check_published_metadata(sftp, session_path: str, expected: dict) -> None:
+    message = "This recording is already published on Oracle with missing or different recording details."
+    try:
+        with sftp.file(posixpath.join(session_path, RECORDING_METADATA_FILE), "rb") as handle:
+            published = StoredRecordingMetadata.model_validate_json(handle.read(64 * 1024))
+    except (OSError, ValidationError) as error:
+        raise RecordingUploadError(message) from error
+    if published.model_dump(exclude_none=True) != expected:
+        raise RecordingUploadError(message)
+
+
 def _remote_size(sftp, path: str) -> int | None:
     try:
         return sftp.stat(path).st_size
@@ -399,7 +428,7 @@ def _rename_into_library(client, stage_path: str, final_path: str) -> None:
     # regardless so a configuration error cannot become a remote shell command.
     import shlex
 
-    command = f"test ! -e {shlex.quote(final_path)} && mv {shlex.quote(stage_path)} {shlex.quote(final_path)}"
+    command = f"test ! -e {shlex.quote(final_path)} && mv -T -- {shlex.quote(stage_path)} {shlex.quote(final_path)}"
     _stdin, stdout, stderr = client.exec_command(command)
     exit_status = stdout.channel.recv_exit_status()
     if exit_status != 0:

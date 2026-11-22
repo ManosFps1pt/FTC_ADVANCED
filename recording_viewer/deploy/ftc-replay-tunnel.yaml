@@ -1,0 +1,11 @@
+config_version: 1
+control_plane:
+  base_url: "https://api.openai.com"
+  api_key: "env:CONTROL_PLANE_API_KEY"
+health:
+  listen_addr: "127.0.0.1:18081"
+admin_ui:
+  open_browser: false
+mcp:
+  server_urls:
+    - url: "http://127.0.0.1:8003/mcp"

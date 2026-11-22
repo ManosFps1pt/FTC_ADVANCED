@@ -2,6 +2,7 @@ import { BenchmarkForm, type InputValue } from "./debugger/BenchmarkForm";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { MechanismControls, type DebugParameter, type SendMechanismAction } from "./debugger/MechanismControls";
 import { DebuggerReport, type Benchmark, type Result, type RunManifest } from "./debugger/Report";
+import { parseRecordingDetails, RecordingDetailsFields, recordingDetailsDraft, type RecordingDetails, type RecordingMetadata } from "./RecordingDetails";
 
 type Node = {id:string;parentId:string;label:string;description:string;kind:string;enabled:boolean;disabledReason:string};
 type Status = {connected:boolean;selected_session?:string;sessions?:{session_id:string;robot_id:string;opmode:string;protocol:number}[];safety?:{armed?:boolean};manifest?:{revision:number;nodes:Node[]};tool_ready?:{nodeId:string;toolInstanceId:string;commands?:{id:string}[];parameters?:DebugParameter[];benchmarks?:Benchmark[]};last_event?:{type:string;data:Record<string,unknown>}};
@@ -10,7 +11,7 @@ let browserLease:string|null=null;
 async function api<T>(path:string,body?:unknown,method="GET"):Promise<T> {
   const response=await fetch(`/api/debug${path}`,{method,headers:{"Content-Type":"application/json"},...(body!==undefined?{body:JSON.stringify(typeof body==="object"&&body!==null?{...body,lease_id:browserLease}:body)}:{})});
   const value=await response.json();
-  if (!response.ok) throw new Error(value.detail??"Debugger request failed");
+  if (!response.ok) throw new Error(typeof value.detail === "string" ? value.detail : "Debugger request failed");
   return value as T;
 }
 
@@ -41,6 +42,39 @@ function ManualMotorControls({toolId,ready,onNotice,authorized}:{authorized:bool
     <div className="dbg-actions"><button className="primary" onPointerDown={event=>{event.currentTarget.setPointerCapture(event.pointerId);start();}} onPointerUp={stop} onPointerCancel={stop} onPointerLeave={event=>{if(event.currentTarget.hasPointerCapture(event.pointerId))stop();}}>Hold to run at {power.toFixed(2)}</button><button className="danger" onClick={stop}>Stop motor</button></div>
     {running&&<p role="status">Motor power command is active.</p>}
   </section>;
+}
+
+type StorageAction = "discard" | "upload" | "keep";
+
+function BenchmarkStorageDialog({ metadata, busy, notice, onSave, onStorage, onDismiss }: {
+  metadata: RecordingMetadata | null | undefined;
+  busy: boolean;
+  notice: string;
+  onSave: (details: RecordingDetails) => Promise<void>;
+  onStorage: (action: StorageAction) => Promise<void>;
+  onDismiss: () => void;
+}) {
+  const [draft, setDraft] = useState(() => recordingDetailsDraft(metadata, "debugging"));
+  const details = parseRecordingDetails(draft);
+  const saved = details != null && metadata?.battery_index === details.battery_index &&
+    metadata?.robot_version === details.robot_version && metadata?.opmode_type === details.opmode_type;
+  return <div className="dbg-modal-backdrop">
+    <section className="dbg-modal" role="dialog" aria-modal="true" aria-labelledby="debugger-storage-title">
+      <h2 id="debugger-storage-title">Benchmark recording details</h2>
+      <form onSubmit={event => { event.preventDefault(); if (details) void onSave(details); }}>
+        <RecordingDetailsFields value={draft} onChange={setDraft} disabled={busy} />
+        <button className="primary" type="submit" disabled={busy || !details || saved}>Save details</button>
+        {saved && <p role="status">Recording details saved on this laptop.</p>}
+      </form>
+      {notice && <p role="status">{notice}</p>}
+      <div className="dbg-actions">
+        <button disabled={busy || !saved} onClick={() => void onStorage("upload")}>Upload only</button>
+        <button disabled={busy || !saved} onClick={() => void onStorage("keep")}>Upload and keep laptop copy</button>
+        <button disabled={busy} className="danger" onClick={() => void onStorage("discard")}>Discard</button>
+      </div>
+      <button disabled={busy} onClick={onDismiss}>Review measurements first</button>
+    </section>
+  </div>;
 }
 
 export function DebuggerPage({ opModeControl, onDebuggerLaunched }: { opModeControl: ReactNode; onDebuggerLaunched: () => void }) {
@@ -162,16 +196,29 @@ export function DebuggerPage({ opModeControl, onDebuggerLaunched }: { opModeCont
       benchmark_id:benchmark.id,request_id:crypto.randomUUID(),inputs},"POST");setRunId(next.runId);await refresh();}
     catch(e){setNotice(String(e));}finally{setBusy(false);}
   };
-  const storage=async(action:"discard"|"upload"|"keep")=>{
+  const saveDetails = async (details: RecordingDetails) => {
+    setBusy(true);
+    setNotice("");
+    try {
+      const metadata = await api<RecordingMetadata>(`/runs/${runId}/metadata`, details, "PATCH");
+      setResult(current => current?.manifest.runId === runId ? { ...current, manifest: { ...current.manifest, metadata } } : current);
+    } catch (error) {
+      setNotice(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const storage=async(action:StorageAction)=>{
     if(action==="discard"&&!window.confirm("Discard this benchmark's raw data and report from the laptop?"))return;
     setBusy(true);
+    setNotice("");
     try{
       if(action==="discard"){await api(`/runs/${runId}`,undefined,"DELETE");setRunId("");setResult(null);}
       else await api(`/runs/${runId}/upload`,{keep_local:action==="keep"},"POST");
       setDismissed(d=>[...d,runId]);await refresh();
     }catch(e){setNotice(String(e));}finally{setBusy(false);}
   };
-  const popup=result&&selectedRun?.storage?.state!=="complete"&&selectedRun?.storage?.state!=="uploading"&&!dismissed.includes(runId);
+  const popup=result?.manifest.runId===runId&&selectedRun?.storage?.state!=="complete"&&selectedRun?.storage?.state!=="uploading"&&!dismissed.includes(runId);
   return <main className="dbg-page">
     <header className="dbg-header"><div><p className="dbg-eyebrow">FTC Advanced</p><h1>Debugger</h1></div><div className="dbg-actions"><a href="#/">Driver Station</a><a href="#/telemetry">Telemetry Lab</a></div></header>
     <p>Connect to the robot, start the debugger, then select a tool, acquire control and arm it here. Loss of focus or connection stops motor output and requires rearming.</p>
@@ -182,7 +229,7 @@ export function DebuggerPage({ opModeControl, onDebuggerLaunched }: { opModeCont
       <button disabled={!status.connected||Boolean(lease)||!status.tool_ready} onClick={()=>void acquire()}>{lease?"Control acquired":"Acquire debugger control"}</button>
       {lease&&<button disabled={busy||authorized||!ready} onClick={()=>void arm()}>{tool==="biobuzz.mechanisms"?"Arm mechanism controls":"Arm selected motor"}</button>}
       {lease&&<button onClick={()=>setLease(null)}>Release control</button>}<span>{authorized?"Armed":"Observation only"}</span></div>
-    {notice&&<div className="dbg-notice" role="status">{notice}</div>}
+    {notice&&!popup&&<div className="dbg-notice" role="status">{notice}</div>}
     <div className="dbg-layout"><aside className="dbg-nav"><p className="dbg-eyebrow">Registered mechanisms · {status.connected?"Connected":"Offline"}</p>{mechanisms.map(m=><button className={selectedMechanism===m.id?"selected":""} key={m.id} disabled={Boolean(active)} onClick={()=>{if(selectedMechanism===m.id)return;if(tool==="biobuzz.mechanisms")setLease(null);setMechanism(m.id);setTool("");setManual(false);}}>{m.label}</button>)}{!mechanisms.length&&<p>{status.connected?"The robot is connected but has not sent a debugger registry yet.":"No robot data connection. Connect to the robot from the Driver Station page, then click Start debugger from laptop."}</p>}</aside>
     <section className="dbg-workbench"><h2>{nodes.find(n=>n.id===selectedMechanism)?.label??"Select a mechanism"}</h2><div className="dbg-tools">{tools.map(t=><article className="dbg-tool" key={t.id}><h3>{t.label}</h3><p>{t.description}</p>{!t.enabled&&<p>{t.disabledReason}</p>}<button disabled={!t.enabled||busy||Boolean(active)} onClick={()=>void choose(t)}>{t.id===tool?"Selected":"Select tool"}</button></article>)}</div>
       {manual&&<ManualMotorControls toolId={tool} ready={ready} authorized={authorized} onNotice={setNotice}/>} {benchmark&&!manual&&<BenchmarkForm key={ready?.toolInstanceId} benchmark={benchmark}
@@ -194,7 +241,8 @@ export function DebuggerPage({ opModeControl, onDebuggerLaunched }: { opModeCont
     {result&&<><DebuggerReport result={result}/>{selectedRun?.storage?.state==="uploading"&&<p role="status">Uploading result… The local copy is retained until upload succeeds.</p>}{selectedRun?.storage?.state==="error"&&<div className="dbg-notice">{selectedRun.storage.detail}<button onClick={()=>setDismissed(d=>d.filter(id=>id!==runId))}>Retry storage decision</button></div>}{selectedRun?.storage?.state==="complete"&&<p>Uploaded successfully. Laptop copy retained.</p>}</>}
     {result&&selectedRun?.storage?.state!=="complete"&&selectedRun?.storage?.state!=="uploading"&&<button onClick={()=>setDismissed(d=>d.filter(id=>id!==runId))}>Choose storage option</button>}
     {runs.length>0&&<section className="dbg-history"><h3>Laptop results</h3>{runs.map(r=><button key={r.runId} disabled={Boolean(active)&&r.runId!==active?.runId} className={runId===r.runId?"selected":""} onClick={()=>setRunId(r.runId)}>{r.mechanismLabel} · {new Date(r.createdAt).toLocaleTimeString()} · {r.outcome??r.state}</button>)}</section>}
-    {popup&&<div className="dbg-modal-backdrop"><section className="dbg-modal" role="dialog" aria-modal="true" aria-labelledby="debugger-storage-title"><p className="dbg-eyebrow">Benchmark result ready</p><h2 id="debugger-storage-title">Choose where to keep this result</h2><p>The raw dataset and report are saved on this laptop. Upload only removes them after the Oracle upload succeeds.</p><div className="dbg-actions"><button disabled={busy} onClick={()=>void storage("upload")}>Upload only</button><button disabled={busy} onClick={()=>void storage("keep")}>Upload and keep laptop copy</button><button disabled={busy} className="danger" onClick={()=>void storage("discard")}>Discard</button></div><button onClick={()=>setDismissed(d=>[...d,runId])}>Review measurements first</button></section></div>}
+    {popup&&<BenchmarkStorageDialog key={runId} metadata={result.manifest.metadata} busy={busy} notice={notice}
+      onSave={saveDetails} onStorage={storage} onDismiss={()=>setDismissed(d=>[...d,runId])} />}
   </main>;
 }
 

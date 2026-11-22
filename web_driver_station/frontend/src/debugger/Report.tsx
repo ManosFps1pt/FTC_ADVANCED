@@ -1,12 +1,13 @@
 import { FeedforwardReport, type FeedforwardAnalysis } from "./FeedforwardReport";
 import type { InputDefinition } from "./BenchmarkForm";
+import { RecordingDetailsSummary, type RecordingMetadata } from "../RecordingDetails";
 import "./debugger.css";
 
 export type Benchmark = { id: string; label: string; description: string; version: number; reverseAllowed?: boolean; maxVoltage?: number; inputs?: InputDefinition[] };
 export type RunManifest = { runId: string; mechanismId?: string; mechanismLabel?: string; motorName?: string;
   createdAt: string; state: string; phase?: string; repetition?: number; direction?: number; message?: string;
   outcome?: string; sampleCount?: number; benchmark?: Benchmark; inputs?: {id: string; int64Value?: string; float64Value?: number; booleanValue?: boolean}[];
-  storage?: {state: string; detail?: string} };
+  metadata?: RecordingMetadata | null; storage?: {state: string; detail?: string} };
 type Range = {median: number; min: number; max: number} | null;
 type Repetition = {direction: number; repetition: number; breakawayVoltage: number|null; breakawayCurrent: number|null; coastTime: number|null; deceleration: number|null; coastInitialSpeed?: number};
 type OperatingPoint = {direction: number; repetition: number; point: number; speed: number; voltage: number; current: number; currentStd: number; speedStd: number};
@@ -36,10 +37,11 @@ export function Plot({title,xLabel,yLabel,series}: {title:string;xLabel:string;y
 
 export function DebuggerReport({result,apiRoot="/api/debug/results"}: {result:Result;apiRoot?:string}) {
   const {manifest:m,analysis:a}=result;
-  if (!a) return <div className="dbg-notice">Analysis is unavailable for this result.</div>;
+  const details = <p><RecordingDetailsSummary metadata={m.metadata} /></p>;
+  if (!a) return <div className="dbg-notice">Analysis is unavailable for this result.{details}</div>;
   if ("points" in a) return <article className="dbg-report">
     <header className="dbg-report-heading"><div><h2>{m.mechanismLabel} · {m.benchmark?.label}</h2>
-      <p>{m.outcome} · {m.message} · {m.sampleCount} samples</p></div><div className="dbg-actions">
+      <p>{m.outcome} · {m.message} · {m.sampleCount} samples</p>{details}</div><div className="dbg-actions">
       <a href={`${apiRoot}/${m.runId}/raw`}>Download raw data</a><a href={`${apiRoot}/${m.runId}/report`}>Download report</a></div></header>
     <FeedforwardReport key={m.runId} analysis={a}/><small>Run {m.runId} · Analyzer {a.analyzerId}</small></article>;
   const voltageSeries:Series[]=[], currentSeries:Series[]=[];
@@ -52,7 +54,7 @@ export function DebuggerReport({result,apiRoot="/api/debug/results"}: {result:Re
     if (fit) { const max=Math.max(...points.map(p=>p.speed)); voltageSeries.push({label:`${directionName(d)} fit`,points:[[0,fit.ks],[max,fit.ks+fit.kv*max]]}); }
   }
   return <article className="dbg-report">
-    <header className="dbg-report-heading"><div><p className="dbg-eyebrow">Completed dataset · {m.sampleCount} samples</p><h2>{m.mechanismLabel} · {m.benchmark?.label}</h2><p>{m.outcome} · {m.message}</p></div><div className="dbg-actions"><a href={`${apiRoot}/${m.runId}/raw`}>Download raw data</a><a href={`${apiRoot}/${m.runId}/report`}>Download report</a></div></header>
+    <header className="dbg-report-heading"><div><p className="dbg-eyebrow">Completed dataset · {m.sampleCount} samples</p><h2>{m.mechanismLabel} · {m.benchmark?.label}</h2><p>{m.outcome} · {m.message}</p>{details}</div><div className="dbg-actions"><a href={`${apiRoot}/${m.runId}/raw`}>Download raw data</a><a href={`${apiRoot}/${m.runId}/report`}>Download report</a></div></header>
     <div className="dbg-metrics">{[["breakawayVoltage","Breakaway voltage","V"],["breakawayCurrent","Current near breakaway","A"],["coastTime","Coast 80% → 20%","s"],["deceleration","Coast deceleration",`${a.speedUnit}/s`]].map(([key,label,unit])=><section key={key}><span>{label}</span><strong>{fmt(a.summary[key]?.median)} {a.summary[key]&&<small>{unit}</small>}</strong><small>{a.summary[key]?`Range ${fmt(a.summary[key]?.min)}–${fmt(a.summary[key]?.max)}`:"No complete measurement"}</small></section>)}</div>
     <div className="dbg-metrics">{a.fits.map(({direction,fit})=><section key={direction}><span>{directionName(direction)} running fit</span>{fit?<><strong>kS {fmt(fit.ks)} <small>V</small></strong><span>kV {fmt(fit.kv,6)} {a.kvUnit}</span><small>R² {fmt(fit.r2)} · residual RMS {fmt(fit.rmse)} V{!fit.reliable?" · inspect fit quality":""}</small></>:<p>Insufficient steady operating points</p>}</section>)}</div>
     <div className="dbg-plots"><Plot title="Estimated voltage versus speed" xLabel={a.speedUnit} yLabel="Estimated V" series={voltageSeries}/><Plot title="Motor current versus speed" xLabel={a.speedUnit} yLabel="Current (A)" series={currentSeries}/><Plot title="Coast-down repetitions" xLabel="Time since coast began (s)" yLabel={a.speedUnit} series={a.coasts.map(c=>({label:`${directionName(c.direction)} · ${c.repetition}`,points:c.points}))}/></div>

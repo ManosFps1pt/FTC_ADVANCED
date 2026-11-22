@@ -51,7 +51,9 @@ from .debugger_results import DebuggerResults, atomic_json
 from .debugger_api import install_debugger_controls
 from .incidents import IncidentError, IncidentRecorder
 from .broadcast import BrowserBroadcast
-from .recording_metadata import RECORDING_METADATA_FILE, RecordingMetadata
+from .recording_metadata import (
+    DETAILS_REQUIRED, RECORDING_METADATA_FILE, CompleteRecordingMetadata, has_recording_details,
+)
 from .recording_uploader import RecordingUploadError, RecordingUploader, UploadSettings
 from .review_api import review_routes
 from .saved_runs import saved_runs
@@ -147,7 +149,7 @@ class TelemetryCaptureRequest(BaseModel):
     enabled: bool
 
 
-class RecordingUploadRequest(RecordingMetadata):
+class RecordingUploadRequest(CompleteRecordingMetadata):
     description: str = Field(min_length=1, max_length=4000)
     keep_local: bool = False
 
@@ -939,13 +941,18 @@ class RobotDataService:
                 run["upload"] = queued or {"state": "local"}
             run["video_finalizing"] = not self._video_ready_checker(session_id)
             run["video_warning"] = self._video_errors.get(session_id)
+            run["needs_details"] = not has_recording_details(run)
+            run["prompt_for_details"] = run["needs_details"] and session_id in self._raw_finalized
+            run["details_locked"] = run["upload"]["state"] in {
+                "queued", "uploading", "retrying", "deleting", "uploaded",
+            } or upload.get("metadata") is not None
         return runs
 
     def check_recording_edit(self, session_id: str, *, editing_notes: bool = False) -> None:
         queue_state = self._upload_queue.get(session_id, {}).get("state")
         upload_state = self._upload_states.get(session_id, {}).get("state")
         if (queue_state == "queued" or upload_state in {"uploading", "retrying", "deleting"}
-                or not self._video_ready_checker(session_id)):
+                or (not editing_notes and not self._video_ready_checker(session_id))):
             raise RecordingUploadError("Wait for recording and upload activity to finish")
         if editing_notes and (queue_state == "uploaded" or upload_state == "complete"
                               or self._upload_states.get(session_id, {}).get("metadata") is not None):
@@ -978,6 +985,7 @@ class RobotDataService:
         pending = [
             run["session_id"] for run in runs
             if run["upload"]["state"] in {"local", "failed"}
+            and has_recording_details(run)
             and self._upload_queue.get(run["session_id"], {}).get("state") != "queued"
             and self._upload_states.get(run["session_id"], {}).get("state")
             not in {"uploading", "retrying", "deleting", "complete"}
@@ -1003,6 +1011,9 @@ class RobotDataService:
                 if run is None:
                     self._update_queue_entry(session_id, "failed", "Finalized recording is unavailable")
                     continue
+                if not has_recording_details(run):
+                    self._update_queue_entry(session_id, "failed", DETAILS_REQUIRED)
+                    continue
                 if run["video_finalizing"] or run["upload"]["state"] in {"uploading", "retrying"}:
                     continue
                 if run["upload"]["state"] == "uploaded":
@@ -1012,15 +1023,15 @@ class RobotDataService:
                     self._upload_states[session_id] = {"state": "ready_to_upload"}
                 try:
                     result = await self.upload_recording(
-                        session_id, metadata=RecordingMetadata(title=run["title"], description=run["description"]),
+                        session_id, metadata=CompleteRecordingMetadata.model_validate(run),
                         keep_local=True, wait=True,
                     )
                 except (FtcLogError, RecordingUploadError) as error:
                     self._update_queue_entry(session_id, "failed", str(error))
                     continue
                 if result["state"] == "complete":
-                    self._update_queue_entry(session_id, "uploaded")
-                elif result.get("transient"):
+                    continue
+                if result.get("transient"):
                     self._update_queue_entry(session_id, "queued", "Waiting for the upload server")
                     break
                 else:
@@ -1326,7 +1337,7 @@ class RobotDataService:
         await self._broadcast_status()
 
     async def upload_recording(
-        self, session_id: str, *, metadata: RecordingMetadata, keep_local: bool = False, wait: bool = False
+        self, session_id: str, *, metadata: CompleteRecordingMetadata, keep_local: bool = False, wait: bool = False
     ) -> dict[str, Any]:
         if self._recording_uploader is None:
             raise RecordingUploadError("Recording upload is not configured on this laptop")
@@ -1338,7 +1349,9 @@ class RobotDataService:
         recording_directory = self._raw_recorder.session_path(session_id)
         # A retry must transfer the same bytes as the original upload. The SFTP
         # uploader resumes staged files by size and may have already published the session.
-        notes = current.get("metadata") or {"title": metadata.title, "description": metadata.description}
+        notes = current.get("metadata") or metadata.model_dump(include=set(CompleteRecordingMetadata.model_fields))
+        if not has_recording_details(notes):
+            raise RecordingUploadError(DETAILS_REQUIRED)
         self._upload_states[session_id] = {"state": "uploading", "detail": "Upload started"}
         await self._broadcast_status()
         loop = asyncio.get_running_loop()
@@ -1389,6 +1402,7 @@ class RobotDataService:
                                 "localCopyKept": False,
                             }
                     else:
+                        self._update_queue_entry(session_id, "uploaded")
                         self._upload_states[session_id] = {
                             "state": "complete",
                             "uploadedFiles": result.uploaded_files,

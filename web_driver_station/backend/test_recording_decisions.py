@@ -13,10 +13,11 @@ from pydantic import ValidationError
 
 from .ftclog import FtcLogError, RawFtcLogRecorder
 from .main import RecordingUploadRequest, RobotDataService
-from .recording_metadata import RECORDING_METADATA_FILE, RecordingMetadata
+from .recording_metadata import RECORDING_METADATA_FILE, CompleteRecordingMetadata
 from .recording_uploader import RecordingUploadError, _validated_session
 
-NOTES = RecordingMetadata(title="Drive tuning", description="First run\n\nLowered the gain.")
+DETAILS = {"battery_index": 0, "robot_version": 1, "opmode_type": "teleop"}
+NOTES = CompleteRecordingMetadata(title="Drive tuning", description="First run\n\nLowered the gain.", **DETAILS)
 
 
 class _FakeUploader:
@@ -51,16 +52,25 @@ class _FlakyUploader(_FakeUploader):
 
 
 class RecordingUploadRequestTests(unittest.TestCase):
-    def test_upload_request_requires_both_fields_and_trims_them(self) -> None:
-        for body in ({}, {"title": "  ", "description": "Details"}, {"title": "Drive", "description": "\n"}):
-            with self.subTest(body=body), self.assertRaises(ValidationError):
-                RecordingUploadRequest.model_validate(body)
+    def test_upload_request_requires_notes_and_valid_recording_details(self) -> None:
+        prototype = {"title": "Drive", "description": "Details", **DETAILS}
+        for key, value in (("title", "  "), ("description", "\n"), ("battery_index", -1), ("battery_index", 9),
+                           ("battery_index", True), ("battery_index", 2.5), ("battery_index", "0"),
+                           ("robot_version", 0), ("robot_version", 1.5), ("robot_version", True),
+                           ("opmode_type", "practice")):
+            with self.subTest(key=key, value=value), self.assertRaises(ValidationError):
+                RecordingUploadRequest.model_validate({**prototype, key: value})
+        for key in DETAILS:
+            with self.subTest(missing=key), self.assertRaises(ValidationError):
+                RecordingUploadRequest.model_validate({name: value for name, value in prototype.items() if name != key})
 
         request = RecordingUploadRequest(
-            title="  Drive tuning ", description="\nFirst run\n\nLowered the gain. ", keep_local=True,
+            title="  Drive tuning ", description="\nFirst run\n\nLowered the gain. ", keep_local=True, **DETAILS,
         )
         self.assertEqual(NOTES.title, request.title)
         self.assertEqual(NOTES.description, request.description)
+        self.assertEqual(0, request.battery_index)
+        self.assertEqual(8, RecordingUploadRequest.model_validate({**prototype, "battery_index": 8}).battery_index)
 
 
 class RecordingDecisionTests(unittest.IsolatedAsyncioTestCase):
@@ -153,7 +163,7 @@ class RecordingDecisionTests(unittest.IsolatedAsyncioTestCase):
                 await self._wait_for_upload_state(service, session_id, "error")
             self.assertEqual(NOTES.model_dump(), service.status()["recording"]["uploads"][session_id]["metadata"])
 
-            changed = RecordingMetadata(title="Changed", description="Different notes")
+            changed = CompleteRecordingMetadata(title="Changed", description="Different notes", **{**DETAILS, "battery_index": 8})
             await service.upload_recording(session_id, metadata=changed, keep_local=True)
             await self._wait_for_upload_state(service, session_id, "complete")
             session_path = service._raw_recorder.session_path(session_id)

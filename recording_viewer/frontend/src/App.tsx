@@ -3,6 +3,7 @@ import { DebuggerLibrary } from "./DebuggerLibrary";
 import { TheaterControls, TheaterHeader, useReplayOverlays, type Overlay } from "./ReplayTheater";
 import { ReplayVideo } from "./ReplayVideo";
 import type { ReplayExportFrame } from "./theater-renderer";
+import { RecordingDetailsSummary, type RecordingMetadata } from "../../../web_driver_station/frontend/src/RecordingDetails";
 
 type Device = { id: string; label: string; subsystem: string; deviceType: string };
 type Signal = { id: string; label: string; unit: string; valueType: string; role?: string; deviceId?: string; quantity?: string };
@@ -12,7 +13,6 @@ type Gamepad = Record<string, boolean | number>;
 type GamepadFrame = { robotTimeNs: string; gamepad1: Gamepad; gamepad2: Gamepad };
 type Incident = { id: string; firstSampleSequence: string; lastSampleSequence: string; startRobotTimeNs: string; endRobotTimeNs: string; sources: string[] };
 type DebugMessage = { type: string; robotTimeNs: string; result?: string; commandId?: string; message?: string };
-type RecordingMetadata = { title: string; description: string };
 type Recording = {
   session: { sessionId: string; robotName: string; opModeName: string } | null;
   metadata: RecordingMetadata | null;
@@ -415,10 +415,9 @@ function RecordingApp() {
     {library === null ? <p className="loading">Loading recordings…</p> : library.length ? <section className="recording-grid">
       {library.map(item => <button className="recording-card panel" key={item.id} onClick={() => selectRecording(item.id)}>
         <span className="recording-card-top"><strong>{recordingDate(item.modifiedAtNs)}</strong><small>{item.videoFileCount ? "Video included" : "No video"}</small></span>
-        {item.metadata && <>
-          <strong className="recording-card-title">{item.metadata.title}</strong>
-          <span className="recording-card-description">{item.metadata.description}</span>
-        </>}
+        {item.metadata?.title && <strong className="recording-card-title">{item.metadata.title}</strong>}
+        {item.metadata?.description && <span className="recording-card-description">{item.metadata.description}</span>}
+        <RecordingDetailsSummary metadata={item.metadata} />
         <code>{item.id}</code>
         <span>{item.logFileCount} log {item.logFileCount === 1 ? "file" : "files"} · {formatBytes(item.sizeBytes)}</span>
         <b>Open replay →</b>
@@ -454,7 +453,8 @@ function RecordingApp() {
         <p className="eyebrow">Offline replay</p>
         <h1>{title}</h1>
         <p>{[recording.metadata && recording.session?.robotName, recording.session?.opModeName ?? "Unknown OpMode"].filter(Boolean).join(" · ")}</p>
-        {recording.metadata && <p className="replay-description">{recording.metadata.description}</p>}
+        <p><RecordingDetailsSummary metadata={recording.metadata} /></p>
+        {recording.metadata?.description && <p className="replay-description">{recording.metadata.description}</p>}
       </div>
       <div className="replay-view-tools">
         {canEnterTheater && <button type="button" onClick={() => setTheater(true)}>Video view</button>}

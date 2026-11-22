@@ -1,0 +1,20 @@
+[Unit]
+Description=OpenAI Secure MCP Tunnel for FTC Oracle replays
+Wants=network-online.target ftc-replay-mcp.service
+After=network-online.target ftc-replay-mcp.service
+
+[Service]
+Type=simple
+DynamicUser=true
+EnvironmentFile=/etc/ftc-replay-mcp/tunnel.env
+ExecStart=/usr/local/bin/tunnel-client run --profile-file /etc/ftc-replay-mcp/tunnel.yaml
+ProtectSystem=strict
+ProtectHome=true
+InaccessiblePaths=/srv/ftc-recordings
+NoNewPrivileges=true
+PrivateTmp=true
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

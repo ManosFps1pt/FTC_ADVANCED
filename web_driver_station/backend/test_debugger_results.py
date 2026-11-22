@@ -234,18 +234,24 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(before,len(sent));self.assertEqual("ready",store.manifest(run_id)["state"])
 
     async def test_storage_decisions_and_failed_upload_retention(self):
+        from .recording_metadata import RecordingDetails, read_recording_metadata
+
         with tempfile.TemporaryDirectory() as folder:
             store=DebuggerResults(Path(folder))
+            uploaded_metadata = []
             class Uploader:
                 fail=False
                 def upload(self,path):
                     if self.fail:raise RuntimeError("Upload offline")
+                    uploaded_metadata.append(read_recording_metadata(path))
             uploader=Uploader()
             service=SimpleNamespace(_debug_results=store,_recording_uploader=uploader)
             app=FastAPI();install_debugger_controls(app,service)
             endpoints={(r.path,next(iter(r.methods))):r.endpoint for r in app.routes if hasattr(r,"methods")}
             upload=endpoints[("/api/debug/runs/{run_id}/upload","POST")]
+            save_metadata=endpoints[("/api/debug/runs/{run_id}/metadata","PATCH")]
             listing=endpoints[("/api/debug/runs","GET")]
+            details=RecordingDetails(battery_index=8, robot_version=1, opmode_type="debugging")
             async def wait_upload(run_id):
                 for _ in range(100):
                     state=next((r.get("storage",{}).get("state") for r in listing() if r["runId"]==run_id),None)
@@ -253,13 +259,20 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.sleep(.01)
                 self.fail("Upload did not finish")
             run_id=finish(store);uploader.fail=True
+            with self.assertRaisesRegex(HTTPException, "Save the battery index"):
+                await upload(run_id,StorageRequest())
+            await save_metadata(run_id, details)
+            self.assertEqual(details.model_dump(), store.report(run_id)["manifest"]["metadata"])
             await upload(run_id,StorageRequest());await wait_upload(run_id)
             self.assertTrue(store.path(run_id).exists());self.assertEqual("error",listing()[0]["storage"]["state"])
             uploader.fail=False
             await upload(run_id,StorageRequest(keep_local=True));await wait_upload(run_id)
             self.assertTrue(store.path(run_id).exists());self.assertEqual("complete",listing()[0]["storage"]["state"])
-            delete_id=finish(store);await upload(delete_id,StorageRequest());await wait_upload(delete_id)
+            with self.assertRaisesRegex(HTTPException, "locked"):
+                await save_metadata(run_id, details)
+            delete_id=finish(store);await save_metadata(delete_id, details);await upload(delete_id,StorageRequest());await wait_upload(delete_id)
             self.assertFalse(store.path(delete_id).exists())
+            self.assertEqual([details.model_dump(), details.model_dump()], uploaded_metadata)
             discard_id=finish(store);endpoints[("/api/debug/runs/{run_id}","DELETE")](discard_id)
             self.assertFalse(store.path(discard_id).exists())
 

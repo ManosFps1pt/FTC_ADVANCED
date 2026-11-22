@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -42,17 +43,21 @@ def _run(directory: Path, version: str):
     return load_run(directory)
 
 
-def replay_path(session_id: str, seconds: float | None = None) -> str:
+def replay_path(session_id: str, seconds: float | None = None, *, base: str = "/replays/") -> str:
     suffix = "" if seconds is None else f"&t={seconds:.3f}"
-    return f"/replays/?recording={session_id}{suffix}"
+    return f"{base}?recording={session_id}{suffix}"
 
 
 class RunAnalysis:
-    def __init__(self) -> None:
+    def __init__(self, cache_root: Path | None = None) -> None:
         self._lock = Lock()
+        self._cache_root = cache_root
+
+    def _cache(self, directory: Path) -> Path:
+        return (self._cache_root or directory.parent / ".review-cache") / directory.name
 
     def report(self, directory: Path, version: str) -> dict:
-        cache = directory.parent / ".review-cache" / directory.name
+        cache = self._cache(directory)
         with self._lock:
             path = cache / "report.json"
             try:
@@ -71,7 +76,7 @@ class RunAnalysis:
         from recording_viewer.mainteleop_plots import write_plots
 
         with self._lock:
-            cache = directory.parent / ".review-cache" / directory.name / version
+            cache = self._cache(directory) / version
             if not cache.is_dir():
                 _, tables, traces = analyze(_run(directory, version), SETTINGS)
                 cache.parent.mkdir(parents=True, exist_ok=True)
@@ -117,7 +122,8 @@ class RunAnalysis:
         }
 
 
-def event_page(report: dict, session_id: str, kind: str, offset: int, limit: int) -> dict:
+def event_page(report: dict, session_id: str, kind: str, offset: int, limit: int, *,
+               link: Callable[..., str] = replay_path) -> dict:
     table, key, worst_first = EVENTS[kind]
     rows = sorted(report["tables"][table], key=lambda row: row[key], reverse=worst_first)
     coverage = report["summary"]["quality"]["channel_coverage_fraction"]
@@ -127,7 +133,7 @@ def event_page(report: dict, session_id: str, kind: str, offset: int, limit: int
         "missing_signals": [signal for signal in REQUIRED_SIGNALS[kind] if not coverage.get(signal)],
         "next_offset": offset + limit if offset + limit < len(rows) else None,
         "events": [
-            {**row, "replay_path": replay_path(session_id, row["t_s"])}
+            {**row, "replay_path": link(session_id, row["t_s"])}
             for row in rows[offset:offset + limit]
         ],
     }

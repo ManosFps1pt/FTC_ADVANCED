@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { parseRecordingDetails, RecordingDetailsFields, RecordingDetailsSummary, recordingDetailsDraft, type RecordingMetadata } from "./RecordingDetails";
 
 type Upload = { state: string; detail?: string; uploadedBytes?: number; totalBytes?: number };
-type Run = {
+type Run = RecordingMetadata & {
   session_id: string;
   title: string;
   description: string;
@@ -10,6 +11,9 @@ type Run = {
   interrupted: boolean;
   video_finalizing: boolean;
   video_warning: string | null;
+  needs_details: boolean;
+  prompt_for_details: boolean;
+  details_locked: boolean;
   upload: Upload;
 };
 type RunList = { runs: Run[]; upload_configured: boolean };
@@ -22,7 +26,7 @@ async function request<T>(url: string, method = "GET", data?: object): Promise<T
     body: data ? JSON.stringify(data) : undefined,
   });
   const body = await response.json();
-  if (!response.ok) throw new Error(body.detail || "Could not load recordings");
+  if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "Check the recording details and try again.");
   return body;
 }
 
@@ -36,21 +40,28 @@ function uploadLabel(upload: Upload): string {
   return `${label} ${Math.min(100, Math.round(100 * (upload.uploadedBytes ?? 0) / upload.totalBytes))}%`;
 }
 
-function ManageRecording({ run, onChange }: { run: Run; onChange: () => Promise<void> }) {
+function ManageRecording({ run, onChange, onClose }: { run: Run; onChange: () => Promise<void>; onClose?: () => void }) {
   const [title, setTitle] = useState(run.title);
   const [description, setDescription] = useState(run.description);
+  const [draft, setDraft] = useState(() => recordingDetailsDraft(run));
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const path = `/api/reviews/${run.session_id}`;
-  const locked = busy || run.video_finalizing || ["queued", "uploading", "retrying", "deleting"].includes(run.upload.state);
+  const locked = busy || run.details_locked;
+  const deleteLocked = busy || run.video_finalizing || ["queued", "uploading", "retrying", "deleting"].includes(run.upload.state);
+  const details = parseRecordingDetails(draft);
 
   const update = async (method: "PATCH" | "DELETE") => {
+    if (method === "PATCH" && (!details || locked)) return;
     setBusy(true);
     setNotice("");
     try {
-      await request(path, method, method === "PATCH" ? { title: title.trim(), description } : undefined);
+      await request(path, method, method === "PATCH" ? { title: title.trim(), description, ...details } : undefined);
       await onChange();
-      if (method === "PATCH") setNotice("Notes saved.");
+      if (method === "PATCH") {
+        setNotice("Recording details saved.");
+        onClose?.();
+      }
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
     } finally {
@@ -60,32 +71,36 @@ function ManageRecording({ run, onChange }: { run: Run; onChange: () => Promise<
 
   return <div className="recording-manage">
     <form onSubmit={event => { event.preventDefault(); void update("PATCH"); }}>
-      <label>Title<input value={title} maxLength={120} required disabled={locked || run.upload.state === "uploaded"}
+      <label>Title<input value={title} maxLength={120} required disabled={locked}
         onChange={event => setTitle(event.target.value)} /></label>
-      <label>Notes<textarea value={description} maxLength={4000} disabled={locked || run.upload.state === "uploaded"}
+      <label>Notes<textarea value={description} maxLength={4000} disabled={locked}
         onChange={event => setDescription(event.target.value)} /></label>
+      <RecordingDetailsFields value={draft} onChange={setDraft} disabled={locked} />
       <div className="recording-actions">
-        <button type="submit" disabled={locked || run.upload.state === "uploaded" || !title.trim()}>Save notes</button>
-        <button type="button" className="danger" disabled={locked} onClick={() => {
+        <button type="submit" className="primary" disabled={locked || !title.trim() || !details}>Save details</button>
+        {onClose ? <button type="button" disabled={busy} onClick={onClose}>Fill in later</button>
+          : <button type="button" className="danger" disabled={deleteLocked} onClick={() => {
           if (window.confirm(`Delete the laptop copy of “${run.title}”?`)) void update("DELETE");
-        }}>Delete local copy</button>
+        }}>Delete local copy</button>}
       </div>
     </form>
     {notice && <small role="status">{notice}</small>}
   </div>;
 }
 
-export function RecordingsPanel({ robotState }: { robotState: string }) {
+function RecordingDetailsDialog({ run, onChange, onClose }: { run: Run; onChange: () => Promise<void>; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { dialog.current?.showModal(); }, []);
+  return <dialog ref={dialog} className="recording-details-dialog" aria-labelledby="recording-details-title"
+    onCancel={event => { event.preventDefault(); onClose(); }}>
+    <h2 id="recording-details-title">Recording details</h2>
+    <ManageRecording run={run} onChange={onChange} onClose={onClose} />
+  </dialog>;
+}
+
+export function useRecordingLibrary(robotState: string) {
   const [library, setLibrary] = useState<RunList>();
-  const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
-  const [queueing, setQueueing] = useState(false);
-  const [reviewId, setReviewId] = useState("");
-  const [manageId, setManageId] = useState("");
-  const [findings, setFindings] = useState<Finding[] | null>(null);
-  const [reviewError, setReviewError] = useState("");
-  const [missingSignals, setMissingSignals] = useState<string[]>([]);
-  const [overview, setOverview] = useState<Overview | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -103,6 +118,29 @@ export function RecordingsPanel({ robotState }: { robotState: string }) {
     void update();
     return () => { mounted = false; window.clearTimeout(timer); };
   }, [robotState]);
+
+  return {
+    library, loadError,
+    refresh: async () => setLibrary(await request<RunList>("/api/reviews?limit=256")),
+  };
+}
+
+export function RecordingDetailsPrompt({ library, refresh }: Pick<ReturnType<typeof useRecordingLibrary>, "library" | "refresh">) {
+  const [deferred, setDeferred] = useState<string[]>([]);
+  const prompt = library?.runs.find(run => run.prompt_for_details && !run.details_locked && !deferred.includes(run.session_id));
+  return prompt ? <RecordingDetailsDialog key={prompt.session_id} run={prompt} onChange={refresh}
+    onClose={() => setDeferred(current => [...current, prompt.session_id])} /> : null;
+}
+
+export function RecordingsPanel({ library, loadError, refresh }: ReturnType<typeof useRecordingLibrary>) {
+  const [error, setError] = useState("");
+  const [queueing, setQueueing] = useState(false);
+  const [reviewId, setReviewId] = useState("");
+  const [manageId, setManageId] = useState("");
+  const [findings, setFindings] = useState<Finding[] | null>(null);
+  const [reviewError, setReviewError] = useState("");
+  const [missingSignals, setMissingSignals] = useState<string[]>([]);
+  const [overview, setOverview] = useState<Overview | null>(null);
 
   useEffect(() => {
     if (!reviewId) return;
@@ -126,7 +164,6 @@ export function RecordingsPanel({ robotState }: { robotState: string }) {
     return () => { mounted = false; };
   }, [reviewId]);
 
-  const refresh = async () => setLibrary(await request<RunList>("/api/reviews?limit=256"));
   const upload = async () => {
     setQueueing(true);
     setError("");
@@ -141,15 +178,17 @@ export function RecordingsPanel({ robotState }: { robotState: string }) {
   };
 
   const runs = library?.runs ?? [];
-  const pending = runs.filter(run => ["local", "failed"].includes(run.upload.state));
+  const pending = runs.filter(run => !run.needs_details && ["local", "failed"].includes(run.upload.state));
+  const missingDetails = runs.filter(run => run.needs_details && run.upload.state !== "uploaded").length;
   const pendingMb = Math.ceil(pending.reduce((sum, run) => sum + run.size_bytes, 0) / 1e6);
   const transfers = runs.filter(run => ["queued", "uploading", "retrying"].includes(run.upload.state)).length;
 
   const row = (run: Run) => <li key={run.session_id}>
     <div><strong>{run.title}</strong><small title={run.upload.detail}>
-      {[uploadLabel(run.upload), run.interrupted && "Interrupted", run.video_finalizing && "Finishing video"]
+      {[uploadLabel(run.upload), run.needs_details && run.upload.state !== "uploaded" && "Details required",
+        run.interrupted && "Interrupted", run.video_finalizing && "Finishing video"]
         .filter(Boolean).join(" · ")}
-    </small>{run.video_warning && <small>{run.video_warning}</small>}
+    </small><small><RecordingDetailsSummary metadata={run} /></small>{run.video_warning && <small>{run.video_warning}</small>}
     {run.upload.detail && run.upload.state !== "uploading" && <small>{run.upload.detail}</small>}</div>
     <div className="recording-actions">
       <a href={run.replay_path}>Replay</a>
@@ -173,12 +212,13 @@ export function RecordingsPanel({ robotState }: { robotState: string }) {
           </a>)}
       {missingSignals.length > 0 && <small title={missingSignals.join(", ")}>Some checks lack usable telemetry.</small>}
     </div>}
-    {manageId === run.session_id && <ManageRecording run={run} onChange={refresh} />}
+    {manageId === run.session_id && <ManageRecording key={run.session_id} run={run} onChange={refresh} />}
   </li>;
 
   return <section className="panel local-recordings" aria-label="Local recordings">
     <div className="recordings-heading">
-      <div><h2>Recordings</h2><small>{transfers ? `${transfers} in upload queue` : `${pending.length} pending upload`}</small></div>
+      <div><h2>Recordings</h2><small>{transfers ? `${transfers} in upload queue` : `${pending.length} pending upload`}
+        {missingDetails > 0 && ` · ${missingDetails} need details`}</small></div>
       <div className="recording-actions">
         <a href="/replays/">Replay library</a>
         <button type="button" className="primary" disabled={!pending.length || queueing || !library?.upload_configured} onClick={() => void upload()}>

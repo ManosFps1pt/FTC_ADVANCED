@@ -224,6 +224,12 @@ label { display: grid; gap: .35rem; font-size: .8rem; font-weight: 700; color: #
 .recording-manage form, .recording-manage label { display: grid; gap: .35rem; }
 .recording-manage form { max-width: 38rem; gap: .6rem; }
 .recording-manage textarea { resize: vertical; color: inherit; background: #081728; border: 1px solid #4b7598; border-radius: .4rem; padding: .45rem .65rem; }
+.recording-details-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: .65rem; border: 0; padding: 0; margin: 0; min-width: 0; }
+.recording-details-fields label { display: grid; gap: .35rem; }
+.recording-details-fields input, .recording-details-fields select { width: 100%; }
+.recording-details-dialog { width: min(37rem, calc(100% - 2rem)); max-height: calc(100% - 2rem); padding: 1.4rem; background: #101e2e; color: #e2f2ff; border: 1px solid #4b7598; border-radius: .8rem; }
+.recording-details-dialog::backdrop { background: #030a11b8; }
+.recording-details-dialog h2 { margin-top: 0; }
 .recording-findings a { padding: .3rem .6rem; background: #102b46; border-radius: .35rem; }
 .local-recordings a { color: #8bd3ff; padding-inline: .45rem; }
 .debug-tool-meta { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; color: #9eb4c8; font-size: .75rem; }

@@ -55,9 +55,10 @@ dependencies in `recording_viewer/backend/requirements.txt`.
 
 The hosted service treats `/srv/ftc-recordings` as a library root. Each direct
 UUID-named child is one replay. The browser lists completed sessions first and
-loads a selected session only when requested. Titles and descriptions entered
-in the Driver Station appear in the library and on the replay page. Older
-recordings remain accessible by date and session ID.
+loads a selected session only when requested. The library and replay page show
+the title, notes, battery index, robot version, and OpMode type saved in the
+Driver Station. Older recordings remain accessible by date and session ID, with
+missing details shown as unknown.
 
 The laptop uploader transfers a finalized session over SFTP using an SSH key,
 verifies the known host, uploads to `.incoming/<session-id>`, and renames the
@@ -70,7 +71,8 @@ Install its dependency in the laptop's web environment:
 .\.venv-web\Scripts\python.exe -m pip install -r .\web_driver_station\backend\requirements.txt
 ```
 
-For an explicit retry/upload, run:
+After saving the recording details in the Driver Station, you can retry an
+upload from PowerShell:
 
 ```powershell
 .\.venv-web\Scripts\python.exe -m web_driver_station.backend.recording_uploader `
