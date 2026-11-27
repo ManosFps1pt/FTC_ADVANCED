@@ -102,13 +102,15 @@ function TheaterExport({ options }: { options: TheaterExportOptions }) {
   </div>;
 }
 
-export function TheaterControls({ timeLabel, position, duration, playing, togglePlayback, seek }: {
+export function TheaterControls({ timeLabel, position, duration, playing, togglePlayback, seek, markerRail, scrubber }: {
   timeLabel: string;
   position: number;
   duration: number;
   playing: boolean;
   togglePlayback: () => void;
   seek: (seconds: number) => void;
+  markerRail?: ReactNode;
+  scrubber: ReactNode;
 }) {
   const [fullscreen, setFullscreen] = useState(Boolean(document.fullscreenElement));
   useEffect(() => {
@@ -120,6 +122,8 @@ export function TheaterControls({ timeLabel, position, duration, playing, toggle
   return <section className="theater-controls" aria-label="Video playback">
     <input type="range" aria-label="Replay position" min={0} max={duration} step="0.001"
       value={position} onChange={event => seek(Number(event.target.value))} />
+    {markerRail}
+    {scrubber}
     <div className="theater-control-row">
       <button type="button" className="theater-play" onClick={togglePlayback}>{playing ? "Pause" : "Play"}</button>
       <button type="button" aria-label="Back five seconds" onClick={() => seek(position - 5)}>−5 s</button>

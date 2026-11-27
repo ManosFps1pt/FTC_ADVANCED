@@ -1,6 +1,7 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { DebuggerLibrary } from "./DebuggerLibrary";
 import { TheaterControls, TheaterHeader, useReplayOverlays, type Overlay } from "./ReplayTheater";
+import { MarkerList, MarkerRail, ReplayScrubber, useReplayMarkers } from "./ReplayMarkers";
 import { ReplayVideo } from "./ReplayVideo";
 import type { ReplayExportFrame } from "./theater-renderer";
 import { RecordingDetailsSummary, type RecordingMetadata } from "../../../web_driver_station/frontend/src/RecordingDetails";
@@ -324,10 +325,17 @@ function RecordingApp() {
   const [syncedVideo, setSyncedVideo] = useState<{ url: string; delay: number } | null>(null);
   const [theater, setTheater] = useState(false);
   const { overlays, toggleOverlay } = useReplayOverlays();
+  const markers = useReplayMarkers(selectedRecordingId);
 
   useEffect(() => {
-    void fetch("api/recordings").then(async response => { if (!response.ok) throw new Error(await response.text()); return response.json() as Promise<LibraryRecording[]>; }).then(setLibrary).catch(reason => setError(reason instanceof Error ? reason.message : "Could not load recordings"));
-  }, []);
+    if (selectedRecordingId || library !== null) return;
+    const request = new AbortController();
+    void fetch("api/recordings", { signal: request.signal })
+      .then(async response => { if (!response.ok) throw new Error(await response.text()); return response.json() as Promise<LibraryRecording[]>; })
+      .then(setLibrary)
+      .catch(reason => { if (!request.signal.aborted) setError(reason instanceof Error ? reason.message : "Could not load recordings"); });
+    return () => request.abort();
+  }, [selectedRecordingId, library]);
   useEffect(() => {
     if (!selectedRecordingId) { setRecording(null); return; }
     const request = new AbortController();
@@ -349,6 +357,7 @@ function RecordingApp() {
   }, [selectedRecordingId]);
 
   const selectRecording = (id: string | null) => {
+    setError(null);
     setPlaying(false);
     setTheater(false);
     setSyncedVideo(null);
@@ -369,6 +378,10 @@ function RecordingApp() {
   const seek = (seconds: number) => {
     playhead.current = Math.min(duration, Math.max(0, seconds));
     setPlaybackSeconds(playhead.current);
+  };
+  const jumpToMarker = (seconds: number) => {
+    setPlaying(false);
+    seek(seconds);
   };
   const togglePlayback = () => {
     if (!playing && playhead.current >= duration) seek(0);
@@ -425,6 +438,9 @@ function RecordingApp() {
     </section> : <section className="empty-library panel"><h2>No recordings yet</h2></section>}
   </main>;
   if (!recording) return <main className="loading">Opening recording…</main>;
+  const markerProps = { markers, jumpTo: jumpToMarker, formatTime };
+  const markerRail = <MarkerRail {...markerProps} end={duration} />;
+  const scrubber = <ReplayScrubber {...markerProps} position={elapsed} duration={duration} />;
   const title = recording.metadata?.title ?? recording.session?.robotName ?? "FTC Recording";
   const tracePicker = <div className="signal-picker">{signals.map(signal => <label key={signal.id}>
     <input type="checkbox" checked={selected.includes(signal.id)} onChange={() => toggle(signal.id)} />{signal.label}
@@ -462,7 +478,8 @@ function RecordingApp() {
       </div>
     </header>
     {recording.logFiles.some(name => name.endsWith(".partial")) && <section className="panel" role="status"><strong>Interrupted recording</strong><p>The connection ended before a clean stop. Captured telemetry is preserved; some samples may be missing.</p></section>}
-    <section className="timeline panel"><div><div><p className="eyebrow">Snapshot master clock · whole recording</p><strong>{snapshot ? `Sample #${snapshot.sampleSequence}${snapshot.highlighted ? ` · Highlighted by ${snapshot.highlightSource === "telemetry_lab" ? "Telemetry Lab" : "Control Hub"}` : ""}` : "No snapshots"}</strong><span>{formatTime(elapsed)} / {formatTime(duration)}</span></div><button onClick={togglePlayback} disabled={!snapshot}>{playing ? "Pause" : "Play"}</button></div><input type="range" aria-label="Replay position" min="0" max={duration} step="0.001" value={playbackSeconds} onChange={event => { setPlaying(false); seek(Number(event.target.value)); }} /><div className="timeline-scale"><span>Start</span><span>End</span></div></section>
+    <section className="timeline panel"><div><div><p className="eyebrow">Snapshot master clock · whole recording</p><strong>{snapshot ? `Sample #${snapshot.sampleSequence}${snapshot.highlighted ? ` · Highlighted by ${snapshot.highlightSource === "telemetry_lab" ? "Telemetry Lab" : "Control Hub"}` : ""}` : "No snapshots"}</strong><span>{formatTime(elapsed)} / {formatTime(duration)}</span></div><button onClick={togglePlayback} disabled={!snapshot}>{playing ? "Pause" : "Play"}</button></div><input type="range" aria-label="Replay position" min="0" max={duration} step="0.001" value={playbackSeconds} onChange={event => { setPlaying(false); seek(Number(event.target.value)); }} />{markerRail}<div className="timeline-scale"><span>Start</span><span>End</span></div>{scrubber}</section>
+    <MarkerList {...markerProps} />
     </>}
     <section className={showTheater ? "theater-stage" : "replay-console"}>
       {!showTheater && <aside className="trace-column panel">
@@ -502,7 +519,7 @@ function RecordingApp() {
             </div>
           </div>
         </div>
-        <TheaterControls timeLabel={`${formatTime(elapsed)} / ${formatTime(duration)}`}
+        <TheaterControls timeLabel={`${formatTime(elapsed)} / ${formatTime(duration)}`} markerRail={markerRail} scrubber={scrubber}
           position={elapsed} duration={duration} playing={playing} togglePlayback={togglePlayback} seek={seek} />
       </> : <aside className="instrument-column">{motorPanel}{gamepads}{lights}</aside>}
     </section>

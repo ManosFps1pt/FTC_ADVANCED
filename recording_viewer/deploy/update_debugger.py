@@ -16,6 +16,7 @@ from web_driver_station.backend.recording_uploader import RecordingUploader, Upl
 
 ROOT = "/opt/ftc-recording-viewer"
 FILES = ["recording_viewer/backend/main.py", "recording_viewer/backend/video_sync.py",
+         "recording_viewer/backend/replay_markers.py",
          "recording_viewer/backend/estimate_video_delay.py", "recording_viewer/backend/requirements.txt",
          "web_driver_station/backend/ftclog.py",
          "web_driver_station/backend/protocol_codec.py", "web_driver_station/backend/protocol/robot_data_pb2.py",

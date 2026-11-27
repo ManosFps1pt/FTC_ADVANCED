@@ -1,0 +1,170 @@
+.marker-rail {
+  position: relative;
+  height: 1.3rem;
+  margin-inline: .55rem;
+}
+
+.marker-rail button {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.marker-rail .marker-tick {
+  width: 1.15rem;
+  transform: translateX(-50%);
+  z-index: 1;
+}
+
+.marker-tick::after {
+  display: block;
+  width: .58rem;
+  height: .58rem;
+  margin: auto;
+  border: 1px solid #101927;
+  background: var(--marker-color);
+  content: "";
+  transform: rotate(45deg);
+}
+
+.marker-rail .marker-range { min-width: 3px; }
+.marker-range::after {
+  display: block;
+  height: .48rem;
+  border-radius: .16rem;
+  background: var(--marker-color);
+  content: "";
+}
+
+.marker-rail-two-lanes { height: 1.65rem; }
+.marker-rail-two-lanes .marker-tick { height: .9rem; }
+.marker-rail-two-lanes .marker-range { top: .9rem; height: .75rem; }
+
+.marker-rail button:is(:hover, :focus-visible) {
+  z-index: 2;
+  outline: 1px solid var(--marker-color);
+  outline-offset: 2px;
+  background: transparent;
+}
+
+.replay-scrubber {
+  margin-top: .55rem;
+  padding-top: .55rem;
+  border-top: 1px solid #365775;
+}
+
+.replay-scrubber header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .32rem .65rem;
+}
+.replay-scrubber h2 { margin: 0; color: #e6edf7; font-size: .8rem; }
+.scrubber-time { color: #b8e8ff; font: 700 .75rem ui-monospace, monospace; }
+.scrubber-active-marker { color: var(--marker-color); font-size: .72rem; }
+.scrubber-tools {
+  display: flex;
+  align-items: center;
+  gap: .3rem;
+  margin-inline-start: auto;
+}
+.scrubber-tools small { margin-inline-end: .2rem; color: #a9c7e3; font-size: .7rem; }
+.scrubber-tools button {
+  width: 1.8rem;
+  height: 1.55rem;
+  padding: 0;
+  border: 1px solid #426785;
+  border-radius: .3rem;
+  color: #e6edf7;
+  background: #101f31;
+  font-size: 1rem;
+  line-height: 1;
+}
+.scrubber-tools button:hover:enabled { background: #284f73; }
+
+.scrubber-viewport {
+  position: relative;
+  min-height: 3.35rem;
+  overflow: hidden;
+  margin-top: .3rem;
+  border: 1px solid #365775;
+  border-radius: .4rem;
+  background: #081321;
+  cursor: grab;
+  touch-action: pan-y;
+  user-select: none;
+}
+.scrubber-viewport.is-dragging { cursor: grabbing; }
+.scrubber-viewport:has(.scrubber-ruler:focus-visible) { outline: 2px solid #80d5ff; outline-offset: 2px; }
+.scrubber-recorded { position: absolute; inset-block: 0; background: #152941; pointer-events: none; }
+.scrubber-ruler { position: relative; height: 1.6rem; border-bottom: 1px solid #426785; outline: 0; }
+.scrubber-tick {
+  position: absolute;
+  bottom: 0;
+  height: .24rem;
+  border-left: 1px solid #5a7895;
+  pointer-events: none;
+}
+.scrubber-tick-major {
+  height: 100%;
+  padding: .17rem .28rem;
+  border-left-color: #7393b3;
+  color: #c4d7eb;
+  font: .65rem ui-monospace, monospace;
+  white-space: nowrap;
+}
+.scrubber-viewport .marker-rail { margin-inline: 0; }
+.scrubber-playhead {
+  position: absolute;
+  inset-block: 0;
+  left: 50%;
+  z-index: 3;
+  width: 1px;
+  background: #8bdbff;
+  pointer-events: none;
+}
+.scrubber-playhead::before {
+  position: absolute;
+  top: 0;
+  left: -4px;
+  border: 5px solid transparent;
+  border-top-color: #8bdbff;
+  content: "";
+}
+
+.analysis-markers {
+  margin-top: .7rem;
+  padding: .7rem .9rem;
+}
+
+.analysis-markers h2 { margin: 0 0 .5rem; font-size: .95rem; }
+
+.analysis-markers ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  align-items: stretch;
+  gap: .4rem;
+  max-height: 12rem;
+  overflow: auto;
+  margin: 0;
+  padding: .12rem;
+  list-style: none;
+}
+
+.analysis-markers button {
+  display: flex;
+  gap: .6rem;
+  width: 100%;
+  height: 100%;
+  border-inline-start: .22rem solid var(--marker-color);
+  text-align: start;
+}
+
+.marker-time { flex-shrink: 0; max-width: 45%; color: var(--marker-color); font: .75rem ui-monospace, monospace; }
+.marker-description { display: grid; gap: .22rem; overflow-wrap: anywhere; }
+.marker-category { color: var(--marker-color); font-size: .72rem; }
+.marker-description small { color: #aec5dc; }

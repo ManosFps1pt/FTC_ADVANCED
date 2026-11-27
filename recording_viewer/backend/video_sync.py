@@ -35,6 +35,13 @@ def original_videos(session: Path) -> list[Path]:
     return sorted(path for path in session.rglob("*") if is_original_video(path) and path.is_file())
 
 
+def original_video_at(session: Path, index: int) -> Path:
+    clips = original_videos(session)
+    if not 0 <= index < len(clips) or not clips[index].resolve().is_relative_to(session):
+        raise HTTPException(404, "Video clip was not found")
+    return clips[index]
+
+
 def _sidecar(clip: Path) -> Path:
     return clip.with_suffix(".sync.json")
 
@@ -224,12 +231,8 @@ def video_job_routes(recording_path, load_recording) -> APIRouter:
     router = APIRouter()
     jobs = VideoJobs()
 
-    def get_clip(session_id: str, index: int):
-        session = recording_path(session_id).resolve()
-        clips = original_videos(session)
-        if not 0 <= index < len(clips) or not clips[index].resolve().is_relative_to(session):
-            raise HTTPException(404, "Video clip was not found")
-        return clips[index]
+    def get_clip(session_id: str, index: int) -> Path:
+        return original_video_at(recording_path(session_id).resolve(), index)
 
     @router.get("/{session_id}/video/{index}/status")
     def status(session_id: str, index: int):

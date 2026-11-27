@@ -88,6 +88,26 @@ host is verified against the configured `host_key_fingerprint`; the uploader
 never silently trusts a new server key. The legacy `known_hosts` option remains
 available for environments that need it.
 
+## Analysis markers
+
+On Oracle, the analysis agent can use `mark_replay_events` to put important
+findings on a finalized recording. It takes the recording UUID and up to 25
+events with elapsed seconds from the first telemetry sample, an event kind, a
+title, and an optional evidence note. Use `t_s` for a point or add `end_s` to
+mark a range. The whole-recording timeline and the scrubber below it show points
+as diamonds and ranges as bars. Scroll or drag the scrubber to move through the
+recording beneath the playhead. Use − and + to change the scale. Select a marker
+to seek to its start. The scrubber and **Analysis markers** list show the duration of range markers.
+Open replays pick up new marks automatically.
+
+The authenticated archive MCP requires the `replays:mark` OAuth permission
+for writes. Grant it to the analysis connector in Pocket ID and reconnect
+the connector so it can request the new scope. The MCP server and viewer
+share the SQLite store configured by
+`FTC_REPLAY_MARKERS_DB`. Give the MCP service write access to the store's
+directory and the viewer service read access to the database. The viewer
+serves the markers independently of the recorded telemetry.
+
 ## Hosted HTTPS
 
 `deploy/enable_ip_https.sh` obtains a trusted short-lived Let's Encrypt

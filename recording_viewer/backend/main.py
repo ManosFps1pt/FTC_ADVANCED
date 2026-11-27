@@ -3,27 +3,73 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Callable
 import uuid
+from collections import OrderedDict
+from datetime import datetime
+from hashlib import sha256
+from pathlib import Path
+from threading import Lock
+from typing import Any, Callable
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from google.protobuf.message import DecodeError
+from pydantic import TypeAdapter
 
-from recording_viewer.backend.video_sync import is_original_video, is_video_sync_artifact, original_videos, video_job_routes
+from recording_viewer.backend.replay_markers import ReplayMarker, ReplayMarkerStore
+from recording_viewer.backend.video_sync import (
+    is_original_video,
+    is_video_sync_artifact,
+    original_video_at,
+    original_videos,
+    video_job_routes,
+)
 from web_driver_station.backend.ftclog import FtcLogError, iter_records, is_closed_partial
 from web_driver_station.backend.debugger_results import DebuggerResults
 from web_driver_station.backend.debugger_api import install_result_reads
 from web_driver_station.backend.protocol import robot_data_pb2 as wire
 from web_driver_station.backend.protocol_codec import WireProtocolError, decode
-from web_driver_station.backend.recording_metadata import read_recording_metadata, recording_details
+from web_driver_station.backend.recording_metadata import RECORDING_METADATA_FILE, read_recording_metadata, recording_details
+
+
+REPLAY_CACHE_BYTES = 32 * 1024 * 1024
+REPLAY_JSON = TypeAdapter(dict[str, Any])
+
+
+class ReplayResponseCache:
+    """Keep recently requested compressed replays within a fixed memory budget."""
+
+    def __init__(self) -> None:
+        self._entries: OrderedDict[tuple, tuple[bytes, str]] = OrderedDict()
+        self._size = 0
+        self._lock = Lock()
+
+    def get(self, key: tuple) -> tuple[bytes, str] | None:
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None:
+                self._entries.move_to_end(key)
+            return entry
+
+    def put(self, key: tuple, entry: tuple[bytes, str]) -> None:
+        size = len(entry[0])
+        if size > REPLAY_CACHE_BYTES:
+            return
+        with self._lock:
+            if key in self._entries:
+                self._entries.move_to_end(key)
+                return
+            while self._size + size > REPLAY_CACHE_BYTES:
+                _, (previous_body, _) = self._entries.popitem(last=False)
+                self._size -= len(previous_body)
+            self._entries[key] = entry
+            self._size += size
 
 
 class RecordingLoadError(ValueError):
@@ -141,9 +187,7 @@ class Recording:
 
     def _load(self, log_file: Path | None) -> None:
         channel_keys: dict[int, tuple[str, int]] = {}
-        log_paths = [log_file] if log_file is not None else sorted(
-            (*self.directory.glob("stream-*.ftclog"), *self.directory.glob("stream-*.ftclog.partial"))
-        )
+        log_paths = [log_file] if log_file is not None else _log_paths(self.directory)
         if not log_paths:
             raise RecordingLoadError(f"No .ftclog files found in {self.directory}")
         for log_path in log_paths:
@@ -215,11 +259,8 @@ class Recording:
 def _load_incidents(session_directory: Path) -> list[dict[str, Any]]:
     """Read only fully finalized local incident manifests from a session."""
 
-    directory = session_directory / "incidents"
-    if not directory.is_dir():
-        return []
     incidents: list[dict[str, Any]] = []
-    for path in sorted(directory.glob("*.json")):
+    for path in _incident_paths(session_directory):
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(value, dict) or value.get("version") != 1:
@@ -271,6 +312,44 @@ def _resolve_recording_directory(value: Path) -> Path:
     return path
 
 
+def _log_paths(directory: Path) -> list[Path]:
+    return sorted((*directory.glob("stream-*.ftclog"), *directory.glob("stream-*.ftclog.partial")))
+
+
+def _incident_paths(session_directory: Path) -> list[Path]:
+    return sorted((session_directory / "incidents").glob("*.json"))
+
+
+def _replay_version(directory: Path) -> tuple:
+    session = directory.parent if directory.name == "raw" else directory
+    metadata = session / RECORDING_METADATA_FILE
+    inputs = [*_log_paths(directory), metadata, *_incident_paths(session)]
+    files = []
+    for path in inputs:
+        try:
+            status = path.lstat() if path == metadata else path.stat()
+        except OSError:
+            continue
+        files.append((path, status.st_mode, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns))
+    # The replay contains clip names and order. Only the media route reads their contents.
+    return directory, tuple(files), tuple(original_videos(session))
+
+
+def _accepts_gzip(accept_encoding: str) -> bool:
+    qualities = {}
+    for item in accept_encoding.lower().split(","):
+        coding, _, parameter = item.partition(";")
+        coding = coding.strip()
+        if coding not in {"gzip", "*"}:
+            continue
+        try:
+            quality = float(parameter.strip().removeprefix("q=")) if parameter else 1.0
+        except ValueError:
+            continue
+        qualities[coding] = max(qualities.get(coding, 0.0), quality if 0 < quality <= 1 else 0.0)
+    return qualities.get("gzip", qualities.get("*", 0.0)) > 0
+
+
 def create_app(recording_directory: Path) -> FastAPI:
     """Keep the one-recording local development mode available."""
 
@@ -309,6 +388,8 @@ def create_library_app(recordings_root: Path, *, excluded: Callable[[], set[str]
     """Serve an index of completed recordings and load one on demand."""
 
     library = RecordingLibrary(recordings_root)
+    replay_cache = ReplayResponseCache()
+    markers = ReplayMarkerStore(recordings_root)
     app = FastAPI(title="FTC Recording Viewer", docs_url=None, redoc_url=None)
     install_result_reads(app, DebuggerResults(recordings_root))
     app.add_middleware(
@@ -330,18 +411,24 @@ def create_library_app(recordings_root: Path, *, excluded: Callable[[], set[str]
         except RecordingLoadError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
-    def get_recording(session_id: str) -> Recording:
+    def load_recording(path: Path) -> Recording:
         try:
-            return Recording(get_recording_path(session_id))
+            return Recording(path)
         except RecordingLoadError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
-    def library_model(session_id: str, root_path: str, *, summary_only: bool = False) -> dict[str, Any]:
-        recording = get_recording(session_id)
-        model = recording.summary() if summary_only else recording.browser_model()
+    def get_recording(session_id: str) -> Recording:
+        return load_recording(get_recording_path(session_id))
+
+    def get_recording_directory(path: Path) -> Path:
+        try:
+            return _resolve_recording_directory(path)
+        except RecordingLoadError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    def add_video_urls(model: dict[str, Any], session_id: str, root_path: str) -> None:
         for clip in model["videoClips"]:
             clip["url"] = f"{root_path}/api/recordings/{session_id}/video/{clip['index']}"
-        return model
 
     @app.get("/api/recordings")
     def list_recordings() -> list[dict[str, Any]]:
@@ -359,21 +446,57 @@ def create_library_app(recordings_root: Path, *, excluded: Callable[[], set[str]
             "videoFileCount": len(original_videos(recordings_root / item["session_id"])),
         } for item in saved_runs(recordings_root, excluded())]
 
-    @app.get("/api/recordings/{session_id}")
-    def get_library_recording(session_id: str, request: Request) -> dict[str, Any]:
-        return library_model(session_id, request.scope.get("root_path", ""))
+    @app.get("/api/recordings/{session_id}", response_model=dict[str, Any])
+    def get_library_recording(session_id: str, request: Request) -> Response:
+        path = get_recording_path(session_id)
+        directory = get_recording_directory(path)
+        version = _replay_version(directory)
+        root_path = request.scope.get("root_path", "")
+        key = (session_id, root_path, version)
+        entry = replay_cache.get(key)
+        body = None
+        if entry is None:
+            model = load_recording(path).browser_model()
+            add_video_urls(model, session_id, root_path)
+            # Serialize once in the route's worker thread so the same response can
+            # be compressed and reused without another pass over the replay.
+            body = REPLAY_JSON.dump_json(model)
+            del model
+            compressed = gzip.compress(body, compresslevel=3, mtime=0)
+            entry = compressed, sha256(compressed).hexdigest()
+            if version == _replay_version(directory):
+                replay_cache.put(key, entry)
+        compressed, digest = entry
+        etag = f'"{digest}"'
+        headers = {"Cache-Control": "private, no-cache", "ETag": f"W/{etag}", "Vary": "Accept-Encoding"}
+        matching_tags = {tag.strip().removeprefix("W/") for tag in request.headers.get("if-none-match", "").split(",")}
+        if etag in matching_tags or "*" in matching_tags:
+            return Response(status_code=304, headers=headers)
+        if _accepts_gzip(request.headers.get("accept-encoding", "")):
+            headers["Content-Encoding"] = "gzip"
+            return Response(compressed, media_type="application/json", headers=headers)
+        return Response(body if body is not None else gzip.decompress(compressed),
+                        media_type="application/json", headers=headers)
 
     @app.get("/api/recordings/{session_id}/summary")
     def get_library_recording_summary(session_id: str, request: Request) -> dict[str, Any]:
-        return library_model(session_id, request.scope.get("root_path", ""), summary_only=True)
+        model = get_recording(session_id).summary()
+        add_video_urls(model, session_id, request.scope.get("root_path", ""))
+        return model
+
+    @app.get("/api/recordings/{session_id}/markers")
+    def get_library_recording_markers(session_id: str, response: Response) -> list[ReplayMarker]:
+        path = get_recording_path(session_id)
+        response.headers["Cache-Control"] = "private, no-store"
+        return markers.list_for_run(path.name)
 
     @app.get("/api/recordings/{session_id}/video/{index}")
     def get_library_recording_video(session_id: str, index: int) -> FileResponse:
-        recording = get_recording(session_id)
-        try:
-            path = recording.video_path(index)
-        except RecordingLoadError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+        session = get_recording_path(session_id)
+        directory = get_recording_directory(session)
+        if not _log_paths(directory):
+            raise HTTPException(status_code=404, detail=f"No .ftclog files found in {directory}")
+        path = original_video_at(session, index)
         return FileResponse(path, media_type="video/mp4", filename=path.name)
 
     app.include_router(video_job_routes(get_recording_path, get_recording),

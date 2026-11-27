@@ -2,20 +2,91 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 import uuid
+from contextlib import closing
+from hashlib import sha256
 from pathlib import Path
+from unittest.mock import patch
+
+from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from web_driver_station.backend.ftclog import RawFtcLogRecorder
 from web_driver_station.backend.incidents import IncidentRecorder
 from web_driver_station.backend.protocol import robot_data_pb2 as wire
 from web_driver_station.backend.recording_metadata import RECORDING_METADATA_FILE
 
-from .main import Recording, RecordingLibrary
+from .main import Recording, RecordingLibrary, create_library_app
+from .replay_markers import ReplayMarkerInput, ReplayMarkerStore
 
 
 class RecordingReaderTests(unittest.TestCase):
+    def test_range_markers_preserve_existing_point_markers_and_reject_invalid_ranges(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session_id = str(uuid.uuid4())
+            (root / session_id).mkdir()
+            store = ReplayMarkerStore(root)
+            store.path.parent.mkdir()
+            legacy_json = '{"t_s":1.5,"kind":"other","title":"Point","note":""}'
+            legacy_id = sha256(legacy_json.encode()).hexdigest()[:24]
+            point = ReplayMarkerInput.model_validate_json(legacy_json)
+            with closing(sqlite3.connect(store.path)) as connection, connection:
+                connection.execute("""
+                    CREATE TABLE markers (
+                        session_id TEXT NOT NULL, id TEXT NOT NULL, t_s REAL NOT NULL,
+                        kind TEXT NOT NULL, title TEXT NOT NULL, note TEXT NOT NULL,
+                        PRIMARY KEY (session_id, id)
+                    )
+                """)
+                connection.execute("INSERT INTO markers VALUES (?, ?, ?, ?, ?, ?)",
+                                   (session_id, legacy_id, point.t_s, point.kind, point.title, point.note))
+            existing, = store.list_for_run(session_id)
+            self.assertEqual(legacy_id, existing.id)
+            self.assertIsNone(existing.end_s)
+
+            with self.assertRaises(ValidationError):
+                ReplayMarkerInput(t_s=3, end_s=3, kind="other", title="Empty range")
+            interval = ReplayMarkerInput(t_s=3, end_s=3.15, kind="intake_load", title="Intake stall")
+            with self.assertRaisesRegex(ValueError, "within the recording"):
+                store.add(session_id, [interval], 3.1)
+            records, added = store.add(session_id, [point, interval], 4)
+            self.assertEqual(1, added)
+            self.assertEqual(legacy_id, records[0].id)
+            self.assertEqual(0, store.add(session_id, [interval], 4)[1])
+            with TestClient(create_library_app(root)) as client:
+                markers = client.get(f"/api/recordings/{session_id}/markers").raise_for_status().json()
+            self.assertEqual([None, 3.15], [marker["end_s"] for marker in markers])
+
+    def test_replay_markers_are_ordered_retry_safe_and_separate_from_the_recording(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session_id = str(uuid.uuid4())
+            (root / session_id).mkdir()
+            url = f"/api/recordings/{session_id}/markers"
+            store = ReplayMarkerStore(root)
+            later = ReplayMarkerInput(t_s=9.5, kind="shooter_dip", title="RPM dip")
+            earlier = ReplayMarkerInput(t_s=3.2, kind="voltage_sag", title="Bus voltage sag", note="12.1 V to 10.8 V")
+            with TestClient(create_library_app(root)) as client:
+                self.assertEqual([], client.get(url).raise_for_status().json())
+                self.assertFalse(store.path.exists())
+                with self.assertRaisesRegex(ValueError, "within the recording"):
+                    store.add(session_id, [earlier, later], 9.4)
+                self.assertEqual([], client.get(url).json())
+                _, created = store.add(session_id, [later, earlier, earlier], 10)
+                self.assertEqual(2, created)
+                _, created = store.add(session_id, [earlier, later], 10)
+                self.assertEqual(0, created)
+                found = client.get(url).raise_for_status().json()
+                self.assertEqual([3.2, 9.5], [marker["t_s"] for marker in found])
+                self.assertNotEqual(found[0]["color"], found[1]["color"])
+                self.assertEqual("12.1 V to 10.8 V", found[0]["note"])
+                self.assertEqual([], list((root / session_id).iterdir()))
+                self.assertEqual(404, client.get(f"/api/recordings/{uuid.uuid4()}/markers").status_code)
+
     def test_reads_the_full_catalog_snapshots_and_gamepad_history(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             recordings_root = Path(temporary_directory)
@@ -138,7 +209,7 @@ class RecordingReaderTests(unittest.TestCase):
             self.assertEqual("debug_command_response", recording.debug_messages[0]["type"])
             self.assertEqual("motor.stop", recording.debug_messages[0]["commandId"])
 
-    def test_library_api_serializes_recorded_pose2d(self) -> None:
+    def test_replay_response_preserves_telemetry_and_video_ranges(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             recordings_root = Path(temporary_directory)
             recorder = RawFtcLogRecorder(recordings_root)
@@ -162,15 +233,39 @@ class RecordingReaderTests(unittest.TestCase):
             ])), 3)
             recorder.close_session(session_text)
 
-            # FastAPI serializes this same browser model for the library API.
-            # ``allow_nan=False`` also ensures a malformed pose cannot turn
-            # into an invalid JSON response at replay time.
-            response = json.loads(json.dumps(Recording(recordings_root / session_text).browser_model(), allow_nan=False))
+            url = f"/api/recordings/{session_text}"
+            session_directory = recordings_root / session_text
+            with TestClient(create_library_app(recordings_root)) as client:
+                response = client.get(url, headers={"Accept-Encoding": "gzip"}).raise_for_status()
+                self.assertEqual("gzip", response.headers["Content-Encoding"])
+                self.assertIn("Accept-Encoding", [field.strip() for field in response.headers["Vary"].split(",")])
+                self.assertEqual(
+                    {"x": 24.5, "y": 111.25, "headingRad": 1.57079632679},
+                    response.json()["snapshots"][0]["values"]["localization.pose"],
+                )
+                with patch.object(Recording, "_load", side_effect=AssertionError("Replay was already prepared")):
+                    identity = client.get(url, headers={"Accept-Encoding": "gzip;q=0, *;q=1"}).raise_for_status()
+                    self.assertNotIn("Content-Encoding", identity.headers)
+                    self.assertEqual(response.json(), identity.json())
+                    unchanged = client.get(url, headers={"If-None-Match": response.headers["ETag"]})
+                    self.assertEqual(304, unchanged.status_code)
+                    self.assertEqual(b"", unchanged.content)
 
-            self.assertEqual(
-                {"x": 24.5, "y": 111.25, "headingRad": 1.57079632679},
-                response["snapshots"][0]["values"]["localization.pose"],
-            )
+                (session_directory / RECORDING_METADATA_FILE).write_text('{"title":"Updated title"}', encoding="utf-8")
+                updated = client.get(url, headers={"If-None-Match": response.headers["ETag"]}).raise_for_status()
+                self.assertEqual("Updated title", updated.json()["metadata"]["title"])
+                self.assertNotEqual(response.headers["ETag"], updated.headers["ETag"])
+
+                clip = session_directory / "field.mp4"
+                clip.write_bytes(b"0123456789")
+                with_video = client.get(url, headers={"If-None-Match": updated.headers["ETag"]}).raise_for_status()
+                video_url = with_video.json()["videoClips"][0]["url"]
+                with patch.object(Recording, "_load", side_effect=AssertionError("Media requests should skip telemetry")):
+                    for start, end in ((0, 3), (7, 9)):
+                        partial = client.get(video_url, headers={"Range": f"bytes={start}-{end}"})
+                        self.assertEqual(206, partial.status_code)
+                        self.assertEqual(f"bytes {start}-{end}/10", partial.headers["Content-Range"])
+                        self.assertEqual(b"0123456789"[start:end + 1], partial.content)
 
 
     def test_v3_shooter_batch_keeps_10ms_timestamps_and_interrupted_segment(self) -> None:
